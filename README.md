@@ -2,8 +2,6 @@
 
 Batch subtitle generator for WSL. Point it at a folder of videos and it spits out `.srt` files next to each one. Under the hood it's just ffmpeg for audio extraction and **[whisper.cpp](https://github.com/ggml-org/whisper.cpp)** for transcription, running on your NVIDIA GPU via CUDA.
 
----
-
 ## Project Structure
 
 ```
@@ -20,8 +18,6 @@ subgen/
         ├── ggml-large-v3-q5_0.bin      ← main transcription model
         └── ggml-silero-v5.1.2.bin      ← VAD model (optional but recommended)
 ```
-
-[↑ Back to top](#subgen)
 
 ## Table of Content
 
@@ -52,8 +48,6 @@ subgen/
 | `ffmpeg`                 | `sudo apt install ffmpeg`                                                                                   |
 | `git`                    | For cloning and submodule init                                                                              |
 
-[↑ Back to top](#subgen)
-
 ---
 
 ## Setup
@@ -61,7 +55,7 @@ subgen/
 ### 1. Clone & initialise the submodule
 
 ```bash
-git clone --recurse-submodules https://github.com/your-username/subgen.git
+git clone --recurse-submodules https://github.com/abstration/subgen.git
 cd subgen
 ```
 
