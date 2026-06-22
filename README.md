@@ -21,18 +21,38 @@ subgen/
         └── ggml-silero-v5.1.2.bin      ← VAD model (optional but recommended)
 ```
 
+[↑ Back to top](#subgen)
+
+## Table of Content
+
+- [Project Structure](#project-structure)
+- [Prerequisites](#prerequisites)
+- [Setup](#setup)
+- [CUDA Setup (WSL)](#cuda-setup-wsl)
+- [Usage](#usage)
+- [Add to PATH](#add-to-path)
+- [Configuration](#configuration)
+- [Model Reference](#model-reference)
+- [Updating whisper.cpp](#updating-whispercpp)
+- [Supported Video Formats](#supported-video-formats)
+- [Robustness Features](#robustness-features)
+- [Troubleshooting](#troubleshooting)
+- [License](#license)
+
 ---
 
 ## Prerequisites
 
-| Requirement | Notes |
-|---|---|
-| WSL 2 (Ubuntu) | Windows Subsystem for Linux |
-| NVIDIA GPU + drivers | Install the NVIDIA Graphics Driver on the Windows host. It exposes the GPU to WSL automatically via GPU-PV. |
-| CUDA Toolkit (WSL build) | Install inside WSL from NVIDIA's CUDA repo (see [CUDA Setup](#cuda-setup-wsl)) |
-| `cmake` >= 3.14 | `sudo apt install cmake build-essential` |
-| `ffmpeg` | `sudo apt install ffmpeg` |
-| `git` | For cloning and submodule init |
+| Requirement              | Notes                                                                                                       |
+| ------------------------ | ----------------------------------------------------------------------------------------------------------- |
+| WSL 2 (Ubuntu)           | Windows Subsystem for Linux                                                                                 |
+| NVIDIA GPU + drivers     | Install the NVIDIA Graphics Driver on the Windows host. It exposes the GPU to WSL automatically via GPU-PV. |
+| CUDA Toolkit (WSL build) | Install inside WSL from NVIDIA's CUDA repo (see [CUDA Setup](#cuda-setup-wsl))                              |
+| `cmake` >= 3.14          | `sudo apt install cmake build-essential`                                                                    |
+| `ffmpeg`                 | `sudo apt install ffmpeg`                                                                                   |
+| `git`                    | For cloning and submodule init                                                                              |
+
+[↑ Back to top](#subgen)
 
 ---
 
@@ -65,15 +85,18 @@ cd ..
 > **Build crashing or WSL resetting?** NVCC generates large memory structures for CUDA templates (`fattn`, `ggml-cuda`), peaking at 3-4 GB per compiler thread. On RAM-limited machines this kills the build. Two options:
 >
 > Use a memory-aware job count instead of `-j$(nproc)`:
+>
 > ```bash
 > cmake --build build -j $(free -g | awk '/^Mem:/{j=int($7/3); print j<1?1:j}') --config Release
 > ```
 >
 > Or add swap on the Windows host. Create/edit `%USERPROFILE%\.wslconfig`:
+>
 > ```ini
 > [wsl2]
 > swap=8GB
 > ```
+>
 > Then apply with `wsl --shutdown` in PowerShell.
 
 ### 3. Install ffmpeg
@@ -103,7 +126,7 @@ cd whisper.cpp
 
 You should see a transcript. `ggml_cuda_init` in the output confirms the GPU was picked up.
 
-### 5. Download the VAD model *(optional but recommended)*
+### 5. Download the VAD model _(optional but recommended)_
 
 **[Silero VAD](https://github.com/snakers4/silero-vad)** is a small neural Voice Activity Detection model (~864 KB). With it enabled, whisper-cli identifies speech regions first and skips silence entirely. This makes a real difference on videos with long pauses, intros, or music.
 
@@ -117,6 +140,8 @@ bash whisper.cpp/models/download-vad-model.sh silero-v5.1.2
 Downloads `ggml-silero-v5.1.2.bin` (~864 KB) into `whisper.cpp/models/`.
 
 > **Tip:** VAD is on by default (`USE_VAD=true`). To skip the download and run without it, set `USE_VAD=false` in `subgen.sh`.
+
+[↑ Back to top](#subgen)
 
 ---
 
@@ -162,6 +187,8 @@ source ~/.zshrc   # or ~/.bashrc
 nvcc --version
 ```
 
+[↑ Back to top](#subgen)
+
 ---
 
 ## Usage
@@ -171,6 +198,7 @@ nvcc --version
 ```
 
 The script will:
+
 1. Discover all `.mp4 .mkv .avi .webm .ts .mov` files in the given directory (recursive).
 2. Skip any video that already has a matching `.srt` beside it (resume-safe).
 3. Extract a mono 16 kHz WAV to `/tmp/` via ffmpeg.
@@ -188,21 +216,57 @@ The script will:
 # ...
 ```
 
+[↑ Back to top](#subgen)
+
+---
+
+## Add to PATH
+
+To run `subgen` from anywhere without specifying the full path, symlink it into `~/.local/bin`:
+
+```bash
+mkdir -p ~/.local/bin
+ln -s /path/to/subgen/subgen.sh ~/.local/bin/subgen
+chmod +x /path/to/subgen/subgen.sh
+```
+
+Then verify `~/.local/bin` is on your PATH (it usually is on modern Linux distros):
+
+```bash
+echo $PATH | grep -o "$HOME/.local/bin"
+```
+
+If it's missing, add this to your `~/.bashrc` or `~/.zshrc`:
+
+```bash
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+After that, you can run it from anywhere:
+
+```bash
+subgen "/mnt/c/Users/YourName/Videos/ProjectFolder"
+```
+
+> **Note:** The symlink approach means the script always reflects the latest version — no copying needed.
+
+[↑ Back to top](#subgen)
+
 ---
 
 ## Configuration
 
 All options live at the top of `subgen.sh`. No flags needed at runtime.
 
-| Variable | Default | Description |
-|---|---|---|
-| `WHISPER_MODEL_NAME` | `large-v3-q5_0` | Whisper model variant to use |
-| `LANGUAGE` | `en` | Spoken language code |
-| `TASK` | `transcribe` | `transcribe` or `translate` (to English) |
-| `USE_CUDA` | `true` | Enable NVIDIA GPU acceleration |
-| `NVIDIA_GPU_INDEX` | `0` | GPU index from `nvidia-smi` (set to `1` on dual-GPU systems) |
-| `GPU_FEED_THREADS` | `8` | CPU threads used to feed the GPU |
-| `USE_VAD` | `true` | Enable Voice Activity Detection (skip silence) |
+| Variable             | Default         | Description                                                  |
+| -------------------- | --------------- | ------------------------------------------------------------ |
+| `WHISPER_MODEL_NAME` | `large-v3-q5_0` | Whisper model variant to use                                 |
+| `LANGUAGE`           | `en`            | Spoken language code                                         |
+| `TASK`               | `transcribe`    | `transcribe` or `translate` (to English)                     |
+| `USE_CUDA`           | `true`          | Enable NVIDIA GPU acceleration                               |
+| `NVIDIA_GPU_INDEX`   | `0`             | GPU index from `nvidia-smi` (set to `1` on dual-GPU systems) |
+| `GPU_FEED_THREADS`   | `8`             | CPU threads used to feed the GPU                             |
+| `USE_VAD`            | `true`          | Enable Voice Activity Detection (skip silence)               |
 
 ### Switching models
 
@@ -214,6 +278,8 @@ cd whisper.cpp/models && bash download-ggml-model.sh <model-name>
 
 See the **[Model Reference](#model-reference)** section below for a full breakdown.
 
+[↑ Back to top](#subgen)
+
 ---
 
 ## Model Reference
@@ -223,11 +289,11 @@ See the **[Model Reference](#model-reference)** section below for a full breakdo
 `.en` models are English-only, which gives a marginal accuracy edge on clean English audio. They're only available for the smaller architectures:
 
 | `.en` model | Multilingual equivalent |
-|---|---|
-| `tiny.en` | `tiny` |
-| `base.en` | `base` |
-| `small.en` | `small` |
-| `medium.en` | `medium` |
+| ----------- | ----------------------- |
+| `tiny.en`   | `tiny`                  |
+| `base.en`   | `base`                  |
+| `small.en`  | `small`                 |
+| `medium.en` | `medium`                |
 
 `large-v3` is **multilingual only** — there's no official `large-v3.en`. It handles English fine; just pass `-l en` to lock the language and stop it from guessing wrong.
 
@@ -239,12 +305,12 @@ Quantization swaps 16-bit float weights for smaller integers, cutting file size 
 
 **Quality order:** `FP16 > Q8_0 > Q5_0 > Q4`
 
-| Quantization | Bits | Accuracy loss | Notes |
-|---|---|---|---|
-| `FP16` (none) | 16 | baseline | Full precision, highest VRAM |
-| `Q8_0` | 8 | Negligible | Essentially identical to FP16 in practice |
-| `Q5_0` | 5 | Very small | Best balance, recommended for most GPUs |
-| `Q4` | 4 | Noticeable | Only worth it when VRAM is very tight |
+| Quantization  | Bits | Accuracy loss | Notes                                     |
+| ------------- | ---- | ------------- | ----------------------------------------- |
+| `FP16` (none) | 16   | baseline      | Full precision, highest VRAM              |
+| `Q8_0`        | 8    | Negligible    | Essentially identical to FP16 in practice |
+| `Q5_0`        | 5    | Very small    | Best balance, recommended for most GPUs   |
+| `Q4`          | 4    | Noticeable    | Only worth it when VRAM is very tight     |
 
 The real-world gap between Q8 and Q5 is small. Most files produce identical transcripts. You're more likely to notice a difference with heavy accents, noisy audio, overlapping speakers, or dense technical vocabulary.
 
@@ -254,13 +320,13 @@ The real-world gap between Q8 and Q5 is small. Most files produce identical tran
 
 Measured VRAM with `medium.en` during active transcription: **~2243 MiB / 6144 MiB**.
 
-| Model | File size | VRAM est. | Quality | Languages | Best for |
-|---|---|---|---|---|---|
-| `large-v3-q5_0` | ~1.0 GB | ~1.9 GB | Excellent | 99 | **Default, best all-rounder** |
-| `large-v3-q8_0` | ~1.6 GB | ~2.9 GB | Near-lossless | 99 | Maximum quantized quality |
-| `large-v3` (FP16) | ~2.9 GB | ~5.8 GB | Baseline | 99 | 8 GB+ VRAM only |
-| `medium.en-q5_0` | ~0.5 GB | ~1.0 GB | Good | English | Speed priority or low-VRAM fallback |
-| `medium.en` | ~1.5 GB | ~2.9 GB | Good | English | Unquantized medium baseline |
+| Model             | File size | VRAM est. | Quality       | Languages | Best for                            |
+| ----------------- | --------- | --------- | ------------- | --------- | ----------------------------------- |
+| `large-v3-q5_0`   | ~1.0 GB   | ~1.9 GB   | Excellent     | 99        | **Default, best all-rounder**       |
+| `large-v3-q8_0`   | ~1.6 GB   | ~2.9 GB   | Near-lossless | 99        | Maximum quantized quality           |
+| `large-v3` (FP16) | ~2.9 GB   | ~5.8 GB   | Baseline      | 99        | 8 GB+ VRAM only                     |
+| `medium.en-q5_0`  | ~0.5 GB   | ~1.0 GB   | Good          | English   | Speed priority or low-VRAM fallback |
+| `medium.en`       | ~1.5 GB   | ~2.9 GB   | Good          | English   | Unquantized medium baseline         |
 
 > `large-v3-q5_0` fits comfortably on the RTX 3050 6 GB. `large-v3-q8_0` fits too. Full `large-v3` (FP16) is borderline, so stick with `q5_0` unless you specifically need FP16.
 
@@ -308,12 +374,14 @@ Then set `WHISPER_MODEL_NAME="large-v3-q8_0"` in `subgen.sh`.
 
 ### Quick decision guide
 
-| Goal | Model to use |
-|---|---|
-| Best overall (default) | `large-v3-q5_0` + `LANGUAGE=en` |
-| Maximum quantized quality | `large-v3-q8_0` |
-| Speed over accuracy | `medium.en-q5_0` |
+| Goal                              | Model to use                         |
+| --------------------------------- | ------------------------------------ |
+| Best overall (default)            | `large-v3-q5_0` + `LANGUAGE=en`      |
+| Maximum quantized quality         | `large-v3-q8_0`                      |
+| Speed over accuracy               | `medium.en-q5_0`                     |
 | Multilingual / language switching | `large-v3-q5_0` (omit `LANGUAGE=en`) |
+
+[↑ Back to top](#subgen)
 
 ---
 
@@ -337,6 +405,8 @@ Rebuild after updating:
 cd whisper.cpp && cmake -B build -DGGML_CUDA=1 && cmake --build build --config Release -j$(nproc)
 ```
 
+[↑ Back to top](#subgen)
+
 ---
 
 ## Supported Video Formats
@@ -344,6 +414,8 @@ cd whisper.cpp && cmake -B build -DGGML_CUDA=1 && cmake --build build --config R
 `.mp4` · `.mkv` · `.avi` · `.webm` · `.ts` · `.mov`
 
 Detection is case-insensitive (`.MP4`, `.Mkv`, etc. all work).
+
+[↑ Back to top](#subgen)
 
 ---
 
@@ -356,25 +428,30 @@ Detection is case-insensitive (`.MP4`, `.Mkv`, etc. all work).
 - **Graceful Ctrl+C** — temp files are cleaned up even on interrupt.
 - **Error log** — every failed file is recorded in `transcription_errors.log` so you can handle failures selectively.
 
+[↑ Back to top](#subgen)
+
 ---
 
 ## Troubleshooting
 
-| Symptom | Fix |
-|---|---|
-| `whisper-cli: not found` | Run the cmake build step inside `whisper.cpp/`. |
-| Model not found | Run `bash whisper.cpp/models/download-ggml-model.sh large-v3-q5_0`. |
-| `VAD model not found` | Run `bash whisper.cpp/models/download-vad-model.sh silero-v5.1.2`, or set `USE_VAD=false` in `subgen.sh`. |
-| CUDA silent failure (fell back to CPU) | Not enough VRAM. Try `medium.en-q5_0` (~1.0 GB VRAM). |
-| `failed to initialize CUDA` | Update NVIDIA drivers on the **Windows** host, then reboot. |
-| `No CMAKE_CUDA_COMPILER could be found` | Install the CUDA toolkit and add `nvcc` to `PATH`. See [CUDA Setup](#cuda-setup-wsl). |
+| Symptom                                       | Fix                                                                                                                   |
+| --------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| `whisper-cli: not found`                      | Run the cmake build step inside `whisper.cpp/`.                                                                       |
+| Model not found                               | Run `bash whisper.cpp/models/download-ggml-model.sh large-v3-q5_0`.                                                   |
+| `VAD model not found`                         | Run `bash whisper.cpp/models/download-vad-model.sh silero-v5.1.2`, or set `USE_VAD=false` in `subgen.sh`.             |
+| CUDA silent failure (fell back to CPU)        | Not enough VRAM. Try `medium.en-q5_0` (~1.0 GB VRAM).                                                                 |
+| `failed to initialize CUDA`                   | Update NVIDIA drivers on the **Windows** host, then reboot.                                                           |
+| `No CMAKE_CUDA_COMPILER could be found`       | Install the CUDA toolkit and add `nvcc` to `PATH`. See [CUDA Setup](#cuda-setup-wsl).                                 |
 | Build crashes / WSL resets during compilation | NVCC OOM. Use the memory-aware build command or add swap. See [Build step 2](#2-build-whisper-cli-with-cuda-support). |
-| Wrong GPU used (iGPU instead of dGPU) | Set `NVIDIA_GPU_INDEX=1` (or the correct index from `nvidia-smi`). |
-| Zero-byte WAV file | The video has no audio track; that file is skipped automatically. |
+| Wrong GPU used (iGPU instead of dGPU)         | Set `NVIDIA_GPU_INDEX=1` (or the correct index from `nvidia-smi`).                                                    |
+| Zero-byte WAV file                            | The video has no audio track; that file is skipped automatically.                                                     |
+
+[↑ Back to top](#subgen)
 
 ---
 
 ## License
 
-This script is released under the MIT License.
 [whisper.cpp](https://github.com/ggml-org/whisper.cpp) is a separate project with its own MIT License.
+
+[↑ Back to top](#subgen)

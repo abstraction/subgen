@@ -38,7 +38,7 @@ RESET=$(tput sgr0)
 # ---------------------------------------------------------------------------
 # ROBUST PATHING
 # ---------------------------------------------------------------------------
-SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
+SCRIPT_DIR=$( cd -- "$( dirname -- "$( readlink -f "${BASH_SOURCE[0]}" )" )" &> /dev/null && pwd )
 
 WHISPER_SUBMODULE_DIR="$SCRIPT_DIR/whisper.cpp"
 WHISPER_EXECUTABLE="$WHISPER_SUBMODULE_DIR/build/bin/whisper-cli"
