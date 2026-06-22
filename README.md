@@ -1,6 +1,6 @@
 # subgen
 
-Batch subtitle generator for WSL. Point it at a folder of videos and it spits out `.srt` files next to each one. Under the hood it's just ffmpeg for audio extraction and **[whisper.cpp](https://github.com/ggml-org/whisper.cpp)** for transcription, running on your NVIDIA GPU via CUDA.
+Batch subtitle generator for WSL (English by default, configurable for other Whisper-supported languages). Point it at a folder of videos and it spits out `.srt` files next to each one. Under the hood it's just ffmpeg for audio extraction and **[whisper.cpp](https://github.com/ggml-org/whisper.cpp)** for transcription, running on your NVIDIA GPU via CUDA.
 
 ## Project Structure
 
@@ -33,6 +33,7 @@ subgen/
 - [Supported Video Formats](#supported-video-formats)
 - [Robustness Features](#robustness-features)
 - [Troubleshooting](#troubleshooting)
+- [Future Work](#future-work)
 - [License](#license)
 
 ---
@@ -109,7 +110,7 @@ cd ../..
 
 Downloads `ggml-large-v3-q5_0.bin` (~1.0 GB) into `whisper.cpp/models/`.
 
-> **Why large-v3-q5_0?** Whisper large-v3 is OpenAI's most accurate speech recognition model. The `q5_0` variant quantizes weights to 5-bit integers, cutting VRAM from ~5.8 GB down to ~1.9 GB with barely any accuracy cost. That's what makes it a good fit for 4-6 GB cards like the RTX 3050 6 GB.
+> **Why large-v3-q5_0?** Whisper large-v3 is OpenAI's most accurate speech recognition model. The `q5_0` variant quantizes weights to 5-bit integers, reducing model memory requirements from roughly ~6 GB to around ~2 GB during inference (exact usage depends on context and build settings) with barely any accuracy cost. That's what makes it a good fit for 4-6 GB cards like the RTX 3050 6 GB.
 
 Verify the model and GPU are working with the bundled JFK sample:
 
@@ -122,7 +123,7 @@ You should see a transcript. `ggml_cuda_init` in the output confirms the GPU was
 
 ### 5. Download the VAD model _(optional but recommended)_
 
-**[Silero VAD](https://github.com/snakers4/silero-vad)** is a small neural Voice Activity Detection model (~864 KB). With it enabled, whisper-cli identifies speech regions first and skips silence entirely. This makes a real difference on videos with long pauses, intros, or music.
+**[Silero VAD](https://github.com/snakers4/silero-vad)** is a small neural Voice Activity Detection model (~864 KB). With it enabled, whisper.cpp uses Silero VAD to detect speech regions before transcription, reducing unnecessary processing on long silent sections. This makes a real difference on videos with long pauses, intros, or music.
 
 The model is distributed in GGML format by [ggml-org](https://huggingface.co/ggml-org/whisper-vad) and comes with whisper.cpp's own download helper.
 
@@ -280,7 +281,7 @@ See the **[Model Reference](#model-reference)** section below for a full breakdo
 
 ### `.en` vs multilingual models
 
-`.en` models are English-only, which gives a marginal accuracy edge on clean English audio. They're only available for the smaller architectures:
+`.en` models are English-only, which gives a marginal accuracy edge on clean English audio. The original Whisper release only provides English-specific `.en` checkpoints up to medium size. Large models are multilingual only:
 
 | `.en` model | Multilingual equivalent |
 | ----------- | ----------------------- |
@@ -312,7 +313,7 @@ The real-world gap between Q8 and Q5 is small. Most files produce identical tran
 
 ### Model comparison (RTX 3050 6 GB)
 
-Measured VRAM with `medium.en` during active transcription: **~2243 MiB / 6144 MiB**.
+VRAM usage varies significantly depending on context size and runtime settings.
 
 | Model             | File size | VRAM est. | Quality       | Languages | Best for                            |
 | ----------------- | --------- | --------- | ------------- | --------- | ----------------------------------- |
@@ -386,7 +387,7 @@ The `whisper.cpp` directory is a Git submodule pinned to a specific upstream com
 ```bash
 cd whisper.cpp
 git fetch
-git checkout master
+git checkout master || git checkout main
 git pull
 cd ..
 git add whisper.cpp
@@ -415,6 +416,7 @@ Detection is case-insensitive (`.MP4`, `.Mkv`, etc. all work).
 
 ## Robustness Features
 
+- **Recursive batch discovery** — processes nested folders automatically.
 - **Resume support** — already-transcribed videos are skipped automatically.
 - **VAD auto-retry** — if whisper-cli crashes with VAD enabled (a known malloc issue), the script retries without VAD before giving up on that file.
 - **CUDA silent failure detection** — inspects the whisper-cli log for `ggml_cuda_init` to catch cases where the GPU was silently skipped.
@@ -439,6 +441,49 @@ Detection is case-insensitive (`.MP4`, `.Mkv`, etc. all work).
 | Build crashes / WSL resets during compilation | NVCC OOM. Use the memory-aware build command or add swap. See [Build step 2](#2-build-whisper-cli-with-cuda-support). |
 | Wrong GPU used (iGPU instead of dGPU)         | Set `NVIDIA_GPU_INDEX=1` (or the correct index from `nvidia-smi`).                                                    |
 | Zero-byte WAV file                            | The video has no audio track; that file is skipped automatically.                                                     |
+
+[↑ Back to top](#subgen)
+
+## Future Work
+
+### Persistent transcription worker
+
+The current pipeline uses `whisper.cpp` with CUDA acceleration and the `large-v3-q5_0` model. It is already optimized for local GPU inference and includes VAD support, progress reporting, error handling, and automatic resume handling.
+
+One area for improvement is the current process lifecycle. At the moment, each video starts a new `whisper-cli` process, which means the model has to be loaded into GPU memory again for every file:
+
+```
+Video 1 → Start whisper-cli → Load model → Transcribe → Exit
+Video 2 → Start whisper-cli → Load model → Transcribe → Exit
+Video 3 → Start whisper-cli → Load model → Transcribe → Exit
+```
+
+For large batches containing many short videos, the repeated model initialization overhead can become significant.
+
+A future version could introduce a persistent transcription worker that keeps the Whisper model loaded and processes multiple files through the same inference session:
+
+```
+Video files → FFmpeg → Persistent Whisper worker → SRT output
+                         |
+                         └── Model loaded once and reused
+```
+
+Possible approaches to explore:
+
+- Use the existing `whisper.cpp` server/library API to keep a long-running inference process
+- Evaluate `faster-whisper` (CTranslate2) as an alternative backend
+- Compare both approaches based on real workloads rather than synthetic benchmarks
+
+The evaluation criteria would be:
+
+- total batch processing time
+- model initialization overhead
+- GPU utilization
+- VRAM usage
+- transcription accuracy
+- stability across long-running jobs
+
+The current `whisper.cpp` CLI pipeline will remain the baseline until a measurable improvement is demonstrated.
 
 [↑ Back to top](#subgen)
 
