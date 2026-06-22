@@ -1,9 +1,9 @@
 #!/bin/bash
 #
 # Title: WSL Batch Video Transcriber (Whisper.cpp Pipeline)
-# Description: Automates the batch transcription of videos using ffmpeg and whisper.cpp
-#           Optimized for performance within the Windows Subsystem for Linux (WSL)
-#           environment, handling cross-OS paths and file cleanup.
+# Description: Automates the batch transcription of videos using ffmpeg and whisper.cpp.
+#              Optimized for performance within the Windows Subsystem for Linux (WSL)
+#              environment, handling cross-OS paths and file cleanup.
 #
 # PROJECT STRUCTURE:
 #   subgen/
@@ -16,67 +16,58 @@
 # 1. Init the submodule:  git submodule update --init --recursive
 # 2. Build whisper-cli:   cd whisper.cpp && cmake -B build -DGGML_CUDA=1 && cmake --build build -j$(nproc)
 # 3. Install ffmpeg:      sudo apt install ffmpeg
-# 4. Download the model:  cd whisper.cpp/models && bash download-ggml-model.sh medium.en
+# 4. Download the model:  cd whisper.cpp/models && bash download-ggml-model.sh large-v3-q5_0
 # 5. Download VAD model:  cd whisper.cpp/models && bash download-vad-model.sh silero-v5.1.2
 # 6. Run:                 ./subgen.sh "/mnt/c/Users/YourName/Videos/ProjectFolder"
 
-# --- GLOBAL CONFIGURATION (Phase 2 Optimization) ---
-# Use 'set -e' for immediate exit on error, 'set -u' for unset variables, 'set -o pipefail' for pipeline safety.
 set -euo pipefail
 
-# --- PRETTY CLI COLORS ---
+# ---------------------------------------------------------------------------
+# PRETTY CLI COLORS
+# ---------------------------------------------------------------------------
 BOLD=$(tput bold)
+DIM=$(tput dim 2>/dev/null || echo "")
 BLUE=$(tput setaf 4)
+CYAN=$(tput setaf 6)
 GREEN=$(tput setaf 2)
 RED=$(tput setaf 1)
 YELLOW=$(tput setaf 3)
+MAGENTA=$(tput setaf 5)
 RESET=$(tput sgr0)
 
-# --- ROBUST PATHING ---
-# Get the absolute directory where this script is located.
-# This makes all paths absolute and removes ambiguity, fixing the 'cd' bug.
+# ---------------------------------------------------------------------------
+# ROBUST PATHING
+# ---------------------------------------------------------------------------
 SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 
-# Root of the whisper.cpp git submodule
 WHISPER_SUBMODULE_DIR="$SCRIPT_DIR/whisper.cpp"
-
-# Path to the compiled whisper.cpp executable (inside the submodule)
 WHISPER_EXECUTABLE="$WHISPER_SUBMODULE_DIR/build/bin/whisper-cli"
 
-# --- MODEL, LANGUAGE, AND TASK CONFIGURATION ---
-# Using the standard (unquantized) English-only medium model.
-# Model file lives inside the whisper.cpp submodule's models/ directory.
-WHISPER_MODEL_NAME="medium.en"
-# Set the spoken language (e.g., 'en' for English, 'auto' for auto-detect).
+# ---------------------------------------------------------------------------
+# MODEL, LANGUAGE, AND TASK CONFIGURATION
+# ---------------------------------------------------------------------------
+WHISPER_MODEL_NAME="large-v3-q5_0"
 LANGUAGE="en"
-# Set the task: "transcribe" (speech-to-text) or "translate" (speech-to-English)
 TASK="transcribe"
-
-# Path to the model file (inside the submodule's models/ directory)
 WHISPER_MODEL="$WHISPER_SUBMODULE_DIR/models/ggml-$WHISPER_MODEL_NAME.bin"
 
-# --- GPU CONFIGURATION ---
-# IMPORTANT: Assumes you compiled with -DGGML_CUDA=1.
-# GPU is used BY DEFAULT. Setting this to 'false' will add the '-ng'
-# (no-gpu) flag to force CPU-only processing.
+# ---------------------------------------------------------------------------
+# GPU CONFIGURATION
+# ---------------------------------------------------------------------------
 USE_CUDA=true
-# Set the *specific* GPU index for CUDA to use. This fixes issues on
-# multi-GPU systems (like Intel+NVIDIA) where CUDA defaults to the
-# wrong device (e.g., the iGPU). '0' refers to the first GPU
-# listed in 'nvidia-smi', which should be your NVIDIA card.
 NVIDIA_GPU_INDEX=0
-# Number of CPU threads to use. $(nproc) is for CPU-only.
-# A smaller number (like 8) is *much* more efficient for feeding a GPU.
 GPU_FEED_THREADS=8
 
-# --- VAD (VOICE ACTIVITY DETECTION) CONFIGURATION ---
-# Use VAD to skip silence and significantly speed up transcription.
+# ---------------------------------------------------------------------------
+# VAD (VOICE ACTIVITY DETECTION) CONFIGURATION
+# ---------------------------------------------------------------------------
 USE_VAD=true
-# The VAD model to use.
 VAD_MODEL_NAME="ggml-silero-v5.1.2.bin"
 VAD_MODEL_PATH="$WHISPER_SUBMODULE_DIR/models/$VAD_MODEL_NAME"
 
-# --- STATE & ARGUMENT VALIDATION ---
+# ---------------------------------------------------------------------------
+# STATE & ARGUMENT VALIDATION
+# ---------------------------------------------------------------------------
 NUM_THREADS=$(nproc)
 
 if [ $# -ne 1 ]; then
@@ -87,437 +78,606 @@ fi
 
 INPUT_DIR="$1"
 ERROR_LOG_FILE="$INPUT_DIR/transcription_errors.log"
-# Create a unique temporary directory in the fast WSL environment
 TEMP_DIR="/tmp/whisper_pipeline_$(date +%s)"
 mkdir -p "$TEMP_DIR"
 
-# --- GRACEFUL EXIT TRAP (CTRL+C) ---
-# This function will run on ANY script exit (normal, error, or interrupt)
+# Batch-level counters and timer
+BATCH_START_TIME=$(date +%s)
+FILES_OK=0
+FILES_FAILED=0
+FILES_SKIPPED=0
+
+# GPU verification: set after first file confirms CUDA is active
+GPU_VERIFIED=false
+VRAM_BASELINE_MB=0
+
+# ---------------------------------------------------------------------------
+# HELPERS: UI primitives
+# ---------------------------------------------------------------------------
+
+# Print a styled section header
+section() {
+    local title="$1"
+    echo -e "\n${BLUE}${BOLD}══ ${title} ${RESET}"
+}
+
+# Print a key/value info line
+info() {
+    local key="$1"
+    local val="$2"
+    printf "   ${CYAN}%-22s${RESET} %s\n" "$key" "$val"
+}
+
+# Status badges
+ok()   { echo -e "   ${GREEN}✔ ${1}${RESET}"; }
+warn() { echo -e "   ${YELLOW}⚠ ${1}${RESET}"; }
+err()  { echo -e "   ${RED}✘ ${1}${RESET}" >&2; }
+hint() { echo -e "   ${DIM}→ ${1}${RESET}"; }
+
+# ---------------------------------------------------------------------------
+# GRACEFUL EXIT TRAP
+# ---------------------------------------------------------------------------
 function cleanup() {
-    # '$?' holds the exit code of the last command. 0 = success.
-    local exit_code=$? 
-    
+    local exit_code=$?
+
+    echo ""
     if [ "$exit_code" -eq 130 ]; then
-        # Special code for SIGINT (CTRL+C)
-        echo -e "\n\n${YELLOW}[INTERRUPT]${RESET} User interruption (CTRL+C) detected. Cleaning up..."
+        warn "Interrupted by user (Ctrl+C). Cleaning up..."
     elif [ "$exit_code" -ne 0 ]; then
-        echo -e "\n\n${RED}[ERROR]${RESET} Script exited abnormally (Code: $exit_code). Cleaning up..."
-    else
-        echo -e "\n${GREEN}[FINISH]${RESET} Batch process complete."
+        err "Script exited with an error (code: $exit_code)."
     fi
 
     if [ -d "$TEMP_DIR" ]; then
         rm -rf "$TEMP_DIR"
-        echo -e "   -> Temporary directory ${YELLOW}$TEMP_DIR${RESET} has been cleaned up."
+        hint "Temporary directory cleaned up."
     fi
-    
-    # Reset terminal colors just in case
+
     echo -n "${RESET}"
     exit $exit_code
 }
-# 'trap' calls the 'cleanup' function on any EXIT signal
 trap cleanup EXIT
-# --- END NEW TRAP ---
 
-# --- NEW ERROR LOGGING FUNCTION ---
+# ---------------------------------------------------------------------------
+# ERROR LOG FUNCTION
+# ---------------------------------------------------------------------------
 function log_error() {
     local file_path="$1"
     local error_msg="$2"
     local timestamp
     timestamp=$(date +"%Y-%m-%d %T")
     echo "[$timestamp] FAILED: $file_path" >> "$ERROR_LOG_FILE"
-    echo "       REASON: $error_msg" >> "$ERROR_LOG_FILE"
+    echo "       REASON: $error_msg"       >> "$ERROR_LOG_FILE"
     echo "       ---------------------------------" >> "$ERROR_LOG_FILE"
 }
-# --- END NEW FUNCTION ---
 
+# ---------------------------------------------------------------------------
+# PROGRESS BAR: parse "progress = N%" from whisper log + live VRAM from nvidia-smi
+# ---------------------------------------------------------------------------
+# Usage: show_progress_bar <whisper_log_file> <pid_to_wait_for>
+# Runs in the FOREGROUND, tailing the log until the PID exits.
+function show_progress_bar() {
+    local log_file="$1"
+    local pid="$2"
+    local bar_width=30
+    local pct=0
+    local last_draw=""
+    local vram_used="--"
+    local vram_poll_counter=0
 
-# --- DEPENDENCY CHECK & INITIALIZATION ---
-echo -e "${BLUE}--- DEPENDENCY CHECKS ---${RESET}"
-# Check for whisper.cpp executable
+    # Wait for log file to appear
+    local waited=0
+    while [ ! -f "$log_file" ] && kill -0 "$pid" 2>/dev/null; do
+        sleep 0.2
+        waited=$((waited + 1))
+        [ $waited -gt 25 ] && break
+    done
+
+    printf "\n   "
+
+    while kill -0 "$pid" 2>/dev/null; do
+        if [ -f "$log_file" ]; then
+            local line
+            line=$(grep -oP 'progress\s*=\s*\K[0-9]+' "$log_file" 2>/dev/null | tail -1 || true)
+            if [[ -n "$line" ]]; then
+                pct=$line
+            fi
+        fi
+
+        # Poll VRAM every ~1.5s (every 5 iterations of 0.3s sleep)
+        vram_poll_counter=$(( vram_poll_counter + 1 ))
+        if [ "$USE_CUDA" = true ] && command -v nvidia-smi &>/dev/null && [ $(( vram_poll_counter % 5 )) -eq 0 ]; then
+            local v
+            v=$(nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits --id=$NVIDIA_GPU_INDEX 2>/dev/null | xargs || true)
+            if [[ -n "$v" ]]; then
+                vram_used="${v}"
+            fi
+        fi
+
+        local filled=$(( pct * bar_width / 100 ))
+        local empty=$(( bar_width - filled ))
+        local bar_filled bar_empty
+        bar_filled=$(printf '█%.0s' $(seq 1 $filled 2>/dev/null) 2>/dev/null || true)
+        bar_empty=$(printf '░%.0s' $(seq 1 $empty 2>/dev/null) 2>/dev/null || true)
+        local draw="${pct}|${vram_used}"
+
+        if [ "$draw" != "$last_draw" ]; then
+            if [ "$USE_CUDA" = true ]; then
+                printf "\r   [${GREEN}%s${DIM}%s${RESET}] ${BOLD}%3d%%${RESET}  ${MAGENTA}VRAM: %s/${GPU_VRAM} MiB${RESET}   " \
+                    "$bar_filled" "$bar_empty" "$pct" "$vram_used"
+            else
+                printf "\r   [${GREEN}%s${DIM}%s${RESET}] ${BOLD}%3d%%${RESET}  " \
+                    "$bar_filled" "$bar_empty" "$pct"
+            fi
+            last_draw="$draw"
+        fi
+        sleep 0.3
+    done
+
+    # Final: ensure 100% is shown on success
+    wait "$pid" 2>/dev/null && true
+    local final_exit=$?
+
+    if [ "$final_exit" -eq 0 ]; then
+        local bar
+        bar=$(printf '█%.0s' $(seq 1 $bar_width))
+        if [ "$USE_CUDA" = true ]; then
+            printf "\r   [${GREEN}%s${RESET}] ${BOLD}%3d%%${RESET}  ${MAGENTA}VRAM: %s/${GPU_VRAM} MiB${RESET}   \n" \
+                "$bar" "100" "$vram_used"
+        else
+            printf "\r   [${GREEN}%s${RESET}] ${BOLD}%3d%%${RESET}  \n" "$bar" "100"
+        fi
+    else
+        printf "\n"
+    fi
+
+    return $final_exit
+}
+
+# ---------------------------------------------------------------------------
+# GPU DIAGNOSTICS: one-time proof after first successful transcription
+# ---------------------------------------------------------------------------
+# Parses the whisper log to extract: backend, VRAM loaded, encode speed,
+# and computes a real-time speed ratio to prove GPU is active.
+function gpu_diagnostics() {
+    local log_file="$1"
+    local audio_seconds="$2"   # duration of the WAV in seconds
+
+    echo ""
+    echo -e "   ${MAGENTA}${BOLD}┌── GPU PROOF (first-file diagnostic) ──────────────────────┐${RESET}"
+
+    # 1. Backend confirmation
+    local backend
+    backend=$(grep -oP 'whisper_backend_init_gpu: using \K.*' "$log_file" 2>/dev/null | head -1 || true)
+    if [[ -n "$backend" ]]; then
+        echo -e "   ${MAGENTA}│${RESET}  ${GREEN}✔${RESET} Backend:       ${BOLD}$backend${RESET}"
+    else
+        echo -e "   ${MAGENTA}│${RESET}  ${RED}✘${RESET} Backend:       ${RED}No CUDA backend found in log!${RESET}"
+    fi
+
+    # 2. Model VRAM loaded
+    local model_vram
+    model_vram=$(grep -oP 'CUDA0 total size\s*=\s*\K[0-9.]+' "$log_file" 2>/dev/null | head -1 || true)
+    if [[ -n "$model_vram" ]]; then
+        echo -e "   ${MAGENTA}│${RESET}  ${GREEN}✔${RESET} Model in VRAM: ${BOLD}${model_vram} MB${RESET} loaded to GPU"
+    fi
+
+    # 3. Encode speed (the killer metric)
+    local encode_per_run
+    encode_per_run=$(grep -oP 'encode time\s*=.*?\(\s*\K[0-9.]+(?=\s*ms per run)' "$log_file" 2>/dev/null | head -1 || true)
+    if [[ -n "$encode_per_run" ]]; then
+        echo -e "   ${MAGENTA}│${RESET}  ${GREEN}✔${RESET} Encode speed:  ${BOLD}${encode_per_run} ms/pass${RESET}  (CPU would be ~3000-5000 ms)"
+    fi
+
+    # 4. Real-time speed ratio
+    local total_ms
+    total_ms=$(grep -oP 'total time\s*=\s*\K[0-9.]+' "$log_file" 2>/dev/null | head -1 || true)
+    if [[ -n "$total_ms" ]] && [[ -n "$audio_seconds" ]]; then
+        local total_sec
+        total_sec=$(awk "BEGIN {printf \"%.1f\", $total_ms / 1000}")
+        local ratio
+        ratio=$(awk "BEGIN {printf \"%.1f\", $audio_seconds / ($total_ms / 1000)}")
+        echo -e "   ${MAGENTA}│${RESET}  ${GREEN}✔${RESET} Speed ratio:   ${BOLD}${ratio}× real-time${RESET}  (${audio_seconds}s audio → ${total_sec}s wall)"
+        # Verdict
+        local ratio_int
+        ratio_int=$(awk "BEGIN {printf \"%d\", $audio_seconds / ($total_ms / 1000)}")
+        if [ "$ratio_int" -ge 5 ]; then
+            echo -e "   ${MAGENTA}│${RESET}"
+            echo -e "   ${MAGENTA}│${RESET}  ${GREEN}${BOLD}   ✓ VERDICT: GPU is confirmed active.${RESET}"
+            echo -e "   ${MAGENTA}│${RESET}  ${DIM}   (>5× real-time on large-v3-q5_0 is impossible on CPU)${RESET}"
+        else
+            echo -e "   ${MAGENTA}│${RESET}"
+            echo -e "   ${MAGENTA}│${RESET}  ${YELLOW}${BOLD}   ⚠ VERDICT: Speed is suspiciously low.${RESET}"
+            echo -e "   ${MAGENTA}│${RESET}  ${YELLOW}   This may indicate GPU is NOT being used.${RESET}"
+            echo -e "   ${MAGENTA}│${RESET}  ${YELLOW}   Expected >5× for GPU; got ${ratio}×.${RESET}"
+        fi
+    fi
+
+    # 5. Live VRAM delta
+    if [ "$USE_CUDA" = true ] && command -v nvidia-smi &>/dev/null; then
+        local current_vram
+        current_vram=$(nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits --id=$NVIDIA_GPU_INDEX 2>/dev/null | xargs || true)
+        if [[ -n "$current_vram" ]] && [ "$VRAM_BASELINE_MB" -gt 0 ]; then
+            local delta=$(( current_vram - VRAM_BASELINE_MB ))
+            echo -e "   ${MAGENTA}│${RESET}  ${GREEN}✔${RESET} VRAM delta:    ${BOLD}+${delta} MiB${RESET} above idle baseline (${VRAM_BASELINE_MB} → ${current_vram} MiB)"
+        fi
+    fi
+
+    echo -e "   ${MAGENTA}${BOLD}└───────────────────────────────────────────────────────────┘${RESET}"
+    echo ""
+}
+
+# ---------------------------------------------------------------------------
+# DEPENDENCY CHECKS
+# ---------------------------------------------------------------------------
+section "DEPENDENCY CHECKS"
+
 if [ ! -f "$WHISPER_EXECUTABLE" ]; then
-    echo -e "${RED}ERROR: Whisper executable not found at '$WHISPER_EXECUTABLE'.${RESET}" >&2
-    echo "         (Checked absolute path: whisper.cpp/build/bin/whisper-cli)." >&2
-    echo -e "         ${YELLOW}Please build the submodule:${RESET}" >&2
-    echo -e "         ${YELLOW}  cd whisper.cpp && cmake -B build -DGGML_CUDA=1 && cmake --build build -j\$(nproc)${RESET}" >&2
+    err "whisper-cli not found at: $WHISPER_EXECUTABLE"
+    hint "Build it: cd whisper.cpp && cmake -B build -DGGML_CUDA=1 && cmake --build build -j\$(nproc)"
     exit 1
 fi
-echo -e "   ${GREEN}[SUCCESS]${RESET} Found whisper-cli: $WHISPER_EXECUTABLE"
+ok "whisper-cli   $(basename "$WHISPER_EXECUTABLE")"
 
-# Check for FFmpeg dependency
 if ! command -v ffmpeg &> /dev/null; then
-    echo -e "${RED}ERROR: FFmpeg is not installed. Please run: sudo apt install ffmpeg${RESET}" >&2
+    err "ffmpeg is not installed."
+    hint "Fix: sudo apt install ffmpeg"
     exit 1
 fi
-echo -e "   ${GREEN}[SUCCESS]${RESET} Found ffmpeg."
+ok "ffmpeg        $(ffmpeg -version 2>&1 | head -1 | awk '{print $3}')"
 
-# Check for main model file
 if [ ! -f "$WHISPER_MODEL" ]; then
-    echo -e "${RED}ERROR: Whisper model '$WHISPER_MODEL_NAME' not found.${RESET}" >&2
-    echo "         Expected file at: '$WHISPER_MODEL'." >&2
-    echo "         (Inside the whisper.cpp submodule's models/ directory)." >&2
-    echo -e "         ${YELLOW}Please run: cd whisper.cpp/models && bash download-ggml-model.sh $WHISPER_MODEL_NAME${RESET}" >&2
+    err "Model '$WHISPER_MODEL_NAME' not found at: $WHISPER_MODEL"
+    hint "Download: cd whisper.cpp/models && bash download-ggml-model.sh $WHISPER_MODEL_NAME"
     exit 1
 fi
-echo -e "   ${GREEN}[SUCCESS]${RESET} Found main model: $WHISPER_MODEL_NAME"
+ok "model         $WHISPER_MODEL_NAME"
 
-# Check for VAD model file (if enabled)
 if [ "$USE_VAD" = true ]; then
     if [ ! -f "$VAD_MODEL_PATH" ]; then
-        echo -e "${RED}ERROR: VAD model not found at '$VAD_MODEL_PATH'.${RESET}" >&2
-        echo "         (Inside the whisper.cpp submodule's models/ directory)." >&2
-        echo -e "         ${YELLOW}VAD is enabled, but the model is missing.${RESET}" >&2
-        echo -e "         ${YELLOW}Please run: cd whisper.cpp/models && bash download-vad-model.sh silero-v5.1.2${RESET}" >&2
+        err "VAD model not found at: $VAD_MODEL_PATH"
+        hint "Download: cd whisper.cpp/models && bash download-vad-model.sh silero-v5.1.2"
         exit 1
     fi
-    echo -e "   ${GREEN}[SUCCESS]${RESET} Found VAD model: $VAD_MODEL_NAME"
+    ok "VAD model     $VAD_MODEL_NAME"
 fi
 
-# --- GPU VALIDATION ---
-# If CUDA is enabled, try to validate that the target GPU is actually an NVIDIA card.
+# ---------------------------------------------------------------------------
+# GPU VALIDATION
+# ---------------------------------------------------------------------------
+GPU_NAME=""
 if [ "$USE_CUDA" = true ]; then
-    echo -e "${BLUE}--- GPU VALIDATION ---${RESET}"
+    section "GPU VALIDATION"
     if command -v nvidia-smi &> /dev/null; then
-        echo -e "   -> 'nvidia-smi' found. Querying for GPU at index ${YELLOW}$NVIDIA_GPU_INDEX${RESET}..."
-        # Query for the name of the GPU at the specified index.
-        # Use 'set +e' to temporarily allow this command to fail without exiting the script
         set +e
-        GPU_NAME=$(nvidia-smi --query-gpu=name --format=csv,noheader,nounits --id=$NVIDIA_GPU_INDEX 2> /dev/null)
+        GPU_NAME=$(nvidia-smi --query-gpu=name,memory.total,driver_version \
+                   --format=csv,noheader,nounits --id=$NVIDIA_GPU_INDEX 2>/dev/null)
         NVIDIA_SMI_EXIT_CODE=$?
-        set -e # Re-enable immediate exit on error
+        set -e
 
-        if [ $NVIDIA_SMI_EXIT_CODE -eq 0 ] && [[ "$GPU_NAME" == *"NVIDIA"* ]]; then
-            # Success!
-            echo -e "   ${GREEN}[SUCCESS]${RESET} Found '${BOLD}$GPU_NAME${RESET}' at index $NVIDIA_GPU_INDEX."
-            echo "   -> Pipeline will proceed with NVIDIA hardware acceleration."
+        GPU_MODEL=$(echo "$GPU_NAME" | cut -d',' -f1 | xargs)
+        GPU_VRAM=$(echo  "$GPU_NAME" | cut -d',' -f2 | xargs)
+        GPU_DRIVER=$(echo "$GPU_NAME" | cut -d',' -f3 | xargs)
+
+        if [ $NVIDIA_SMI_EXIT_CODE -eq 0 ] && [[ "$GPU_MODEL" == *"NVIDIA"* ]]; then
+            # Capture idle VRAM baseline for later delta comparison
+            VRAM_BASELINE_MB=$(nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits --id=$NVIDIA_GPU_INDEX 2>/dev/null | xargs || echo "0")
+            ok "GPU detected"
+            info "Device [${NVIDIA_GPU_INDEX}]:" "$GPU_MODEL"
+            info "VRAM (total):" "${GPU_VRAM} MiB"
+            info "VRAM (idle):" "${VRAM_BASELINE_MB} MiB"
+            info "Driver:" "$GPU_DRIVER"
+            hint "CUDA_VISIBLE_DEVICES=${NVIDIA_GPU_INDEX} for all transcriptions."
         elif [ $NVIDIA_SMI_EXIT_CODE -eq 0 ]; then
-            # Found a GPU, but it's not NVIDIA (e.g., Intel)
-            echo -e "${RED}!!! FATAL GPU ERROR: Found a GPU at index $NVIDIA_GPU_INDEX, but it's not an NVIDIA card:${RESET}" >&2
-            echo -e "       -> Found: '$GPU_NAME'" >&2
-            echo "       -> This pipeline requires an NVIDIA GPU for CUDA acceleration." >&2
-            echo -e "       -> ${YELLOW}Please check your NVIDIA_GPU_INDEX setting in this script or your WSL/CUDA setup.${RESET}" >&2
+            err "GPU at index $NVIDIA_GPU_INDEX is not an NVIDIA card: '$GPU_MODEL'"
+            hint "Check your NVIDIA_GPU_INDEX in this script or your WSL/CUDA setup."
             exit 1
         else
-            # nvidia-smi failed (e.g., index out of bounds, driver issue)
-            echo -e "${RED}!!! FATAL GPU ERROR: 'nvidia-smi' failed to query GPU at index $NVIDIA_GPU_INDEX.${RESET}" >&2
-            echo "       -> This could mean the index is wrong, or there's an NVIDIA driver issue inside WSL." >&2
-            echo -e "       -> ${YELLOW}Run 'nvidia-smi' manually to check.${RESET}" >&2
+            err "nvidia-smi failed to query GPU at index $NVIDIA_GPU_INDEX."
+            hint "Run 'nvidia-smi' manually to diagnose."
             exit 1
         fi
     else
-        # nvidia-smi command not found
-        echo -e "${YELLOW}WARNING: 'nvidia-smi' command not found.${RESET}" >&2
-        echo "   Cannot validate GPU. Will attempt to run with CUDA, but this may fail or use the wrong device." >&2
-        echo "   Please ensure NVIDIA drivers are correctly installed and exposed to WSL." >&2
+        warn "nvidia-smi not found. Cannot pre-validate GPU."
+        hint "CUDA may still work, but we cannot confirm the correct device."
     fi
 fi
-# --- END GPU VALIDATION ---
 
-echo -e "${BLUE}--- STARTING BATCH TRANSCRIPTION PIPELINE ---${RESET}"
-echo -e "   ${BOLD}Input Directory:${RESET} $INPUT_DIR"
-echo -e "   ${BOLD}Temporary Staging:${RESET} $TEMP_DIR"
-echo -e "   ${BOLD}Failure Log:${RESET} $ERROR_LOG_FILE"
+# ---------------------------------------------------------------------------
+# PIPELINE CONFIGURATION SUMMARY (printed once)
+# ---------------------------------------------------------------------------
+section "PIPELINE CONFIGURATION"
+info "Input directory:"   "$INPUT_DIR"
+info "Model:"             "$WHISPER_MODEL_NAME"
+info "Language:"          "$LANGUAGE"
+info "Task:"              "$TASK"
+if [ "$USE_CUDA" = true ]; then
+    info "Acceleration:"  "CUDA (GPU ${NVIDIA_GPU_INDEX}) — ${GPU_FEED_THREADS} feeder threads"
+else
+    info "Acceleration:"  "CPU only — ${NUM_THREADS} threads"
+fi
+info "VAD:"               "$([ "$USE_VAD" = true ] && echo "enabled (${VAD_MODEL_NAME})" || echo "disabled")"
+info "Temp directory:"    "$TEMP_DIR"
+info "Error log:"         "$ERROR_LOG_FILE"
 
-# --- ROBUST FILE DISCOVERY (Using safer -iname operator) ---
+# ---------------------------------------------------------------------------
+# FILE DISCOVERY
+# ---------------------------------------------------------------------------
 mapfile -t VIDEO_FILES < <(
     find "$INPUT_DIR" -type f \( \
         -iname "*.mp4" -o \
         -iname "*.mkv" -o \
         -iname "*.avi" -o \
         -iname "*.webm" -o \
-        -iname "*.ts" -o \
+        -iname "*.ts"  -o \
         -iname "*.mov" \
     \)
 )
 
-# Check if the array is empty (i.e., no files were found)
 if [ ${#VIDEO_FILES[@]} -eq 0 ]; then
-    echo ""
-    echo -e "${RED}!!! FATAL ERROR: No video files found in the specified directory.${RESET}" >&2
-    echo -e "       Path checked: '$INPUT_DIR'" >&2
-    echo -e "       Extensions checked (case-insensitive): mp4, mkv, avi, webm, ts, mov" >&2
-    echo -e "       ${YELLOW}Ensure the folder exists and contains files with one of the supported extensions.${RESET}" >&2
-    echo ""
+    err "No video files found in: $INPUT_DIR"
+    hint "Supported extensions (case-insensitive): mp4, mkv, avi, webm, ts, mov"
     exit 1
 fi
 
-echo -e "   ${BOLD}Found ${#VIDEO_FILES[@]} video file(s)${RESET} for processing."
-echo -e "${BLUE}-------------------------------------------------${RESET}"
+info "Files found:"       "${#VIDEO_FILES[@]}"
 
-# --- MAIN BATCH PROCESSING LOOP ---
-FILE_COUNT=0
+# ---------------------------------------------------------------------------
+# MAIN BATCH PROCESSING LOOP
+# ---------------------------------------------------------------------------
 TOTAL_FILES=${#VIDEO_FILES[@]}
+FILE_COUNT=0
 
 for VIDEO_PATH in "${VIDEO_FILES[@]}"; do
     FILE_COUNT=$((FILE_COUNT + 1))
-    
-    # 1. Path Safety and Naming
+
     VIDEO_FILENAME=$(basename "$VIDEO_PATH")
     VIDEO_BASENAME="${VIDEO_FILENAME%.*}"
     VIDEO_DIR=$(dirname "$VIDEO_PATH")
 
     TEMP_WAV_PATH="$TEMP_DIR/$VIDEO_BASENAME.wav"
     FINAL_SRT_PATH="$VIDEO_DIR/$VIDEO_BASENAME.srt"
-    
-    # Define the output *base* path. whisper-cli will add '.srt' to this.
     TEMP_SRT_BASE_PATH="$TEMP_DIR/$VIDEO_BASENAME"
-    # Define the *actual* output file path we expect whisper-cli to create
     EXPECTED_SRT_PATH="$TEMP_SRT_BASE_PATH.srt"
 
-    # Log file for FFmpeg errors
-    FFMPEG_LOG="$TEMP_DIR/$VIDEO_BASENAME.ffmpeg.log" 
-    # Log file for Whisper stderr (to check for CUDA init)
+    FFMPEG_LOG="$TEMP_DIR/$VIDEO_BASENAME.ffmpeg.log"
     WHISPER_LOG="$TEMP_DIR/$VIDEO_BASENAME.whisper.log"
-    
-    echo -e "\n${BOLD}Processing ($FILE_COUNT/$TOTAL_FILES): $VIDEO_FILENAME${RESET}"
 
-    # --- PHASE 1: PRE-PROCESSING (FFMPEG AUDIO EXTRACTION) ---
-    
-    # *** THIS IS THE RESUME LOGIC ***
-    # Check if the final SRT already exists and skip if it does.
+    FILE_START_TIME=$(date +%s)
+
+    echo ""
+    echo -e "${BOLD}[${FILE_COUNT}/${TOTAL_FILES}]${RESET} ${CYAN}${VIDEO_FILENAME}${RESET}"
+    echo -e "   ${DIM}──────────────────────────────────────────────────${RESET}"
+
+    # ------------------------------------------------------------------
+    # RESUME: skip if SRT already exists
+    # ------------------------------------------------------------------
     if [ -f "$FINAL_SRT_PATH" ]; then
-        echo -e "   ${YELLOW}[SKIP]${RESET} Final SRT already exists at $FINAL_SRT_PATH"
+        warn "Already done — SRT exists, skipping."
+        FILES_SKIPPED=$((FILES_SKIPPED + 1))
         continue
     fi
 
-    echo -e "   ${BLUE}[Phase 1]${RESET} Extracting audio (this may take a moment)..."
-    
-    # 1. Run FFmpeg
-    # Use 'tee' to show live progress while also logging.
-    # '-loglevel warning' hides verbose info, '-stats' shows the progress bar.
+    # ------------------------------------------------------------------
+    # PHASE 1: Audio extraction
+    # ------------------------------------------------------------------
+    printf "   ${BLUE}Phase 1${RESET}  Extracting audio...    "
+
     if ! ffmpeg -i "$VIDEO_PATH" -vn \
         -acodec pcm_s16le \
         -ar 16000 \
         -ac 1 \
-        -y "$TEMP_WAV_PATH" -loglevel warning -stats 2> >(tee "$FFMPEG_LOG" >&2); then
-        
-        # --- CTRL+C (130) CHECK ---
+        -y "$TEMP_WAV_PATH" -loglevel error 2> "$FFMPEG_LOG"; then
+
         exit_code=$?
+        printf "\n"
         if [ "$exit_code" -eq 130 ]; then
-            # 130 is the exit code for SIGINT (CTRL+C)
-            echo -e "\n   ${YELLOW}[INTERRUPT]${RESET} CTRL+C detected during FFmpeg. Exiting..."
+            warn "Interrupted during audio extraction."
             rm -f "$TEMP_WAV_PATH" "$FFMPEG_LOG"
-            exit 130 # This will trigger the main EXIT trap
+            exit 130
         fi
-        # --- END NEW ---
-
-        echo -e "   ${RED}[ERROR]${RESET} FFmpeg failed to extract audio from $VIDEO_FILENAME (Code: $exit_code)." >&2
-        log_error "$VIDEO_PATH" "FFmpeg failed to extract audio (Code: $exit_code)."
-        echo -e "   --- FFMPEG STDERR/STDOUT (see details above) ---" >&2
-        rm -f "$TEMP_WAV_PATH" "$FFMPEG_LOG" 
-        continue
-    fi
-    
-    # 2. Audio Integrity Check
-    if [ ! -s "$TEMP_WAV_PATH" ]; then
-        echo -e "   ${RED}[ERROR]${RESET} FFmpeg exited successfully, but generated a zero-byte WAV file." >&2
-        echo -e "   ${YELLOW}This usually means the video has no detectable audio track. Skipping.${RESET}" >&2
-        log_error "$VIDEO_PATH" "FFmpeg generated a zero-byte (empty) audio file."
+        err "ffmpeg failed (code: $exit_code). See log for details."
+        if [ -s "$FFMPEG_LOG" ]; then
+            sed 's/^/             /' "$FFMPEG_LOG" >&2
+        fi
+        log_error "$VIDEO_PATH" "FFmpeg failed (code: $exit_code)."
         rm -f "$TEMP_WAV_PATH" "$FFMPEG_LOG"
+        FILES_FAILED=$((FILES_FAILED + 1))
         continue
     fi
 
-    rm -f "$FFMPEG_LOG" # Cleanup successful log
-    echo -e "   ${GREEN}[SUCCESS]${RESET} Phase 1 Complete: Audio extracted and integrity validated."
+    if [ ! -s "$TEMP_WAV_PATH" ]; then
+        printf "\n"
+        err "FFmpeg succeeded but produced an empty WAV file."
+        hint "The video likely has no audio track."
+        log_error "$VIDEO_PATH" "FFmpeg produced a zero-byte WAV file."
+        rm -f "$TEMP_WAV_PATH" "$FFMPEG_LOG"
+        FILES_FAILED=$((FILES_FAILED + 1))
+        continue
+    fi
 
-    # --- PHASE 2: TRANSCRIPTION (WHISPER.CPP EXECUTION) ---
+    # Show a short duration summary inline and stash raw seconds for GPU diagnostics
+    WAV_DURATION_RAW=$(ffprobe -v error -show_entries format=duration \
+                       -of default=noprint_wrappers=1:nokey=1 "$TEMP_WAV_PATH" 2>/dev/null || echo "0")
+    WAV_DURATION=$(echo "$WAV_DURATION_RAW" | awk '{printf "%dm%02ds", int($1/60), int($1)%60}' || echo "?")
+    WAV_DURATION_INT=$(echo "$WAV_DURATION_RAW" | awk '{printf "%d", int($1)}' || echo "0")
+    rm -f "$FFMPEG_LOG"
+    echo -e "${GREEN}✔${RESET}  (${WAV_DURATION})"
 
-    echo -e "   ${BLUE}[Phase 2]${RESET} Transcribing audio (this may take several minutes)..."
+    # ------------------------------------------------------------------
+    # PHASE 2: Transcription
+    # ------------------------------------------------------------------
+    printf "   ${BLUE}Phase 2${RESET}  Transcribing...        "
 
-    # Use a Bash array for clean, safe argument handling
+    # Build whisper args
     WHISPER_CMD_ARGS=(
         -m "$WHISPER_MODEL"
         -f "$TEMP_WAV_PATH"
         -l "$LANGUAGE"
     )
-    
-    # *** THREADING OPTIMIZATION ***
+
     if [ "$USE_CUDA" = true ]; then
-        echo "   -> Using GPU (default, no flag added)."
-        echo "   -> Forcing CUDA to use NVIDIA GPU at index $NVIDIA_GPU_INDEX."
         export CUDA_VISIBLE_DEVICES=$NVIDIA_GPU_INDEX
-        
-        # *** CPU OPTIMIZATION FOR GPU ***
-        echo "   -> Setting CPU threads to $GPU_FEED_THREADS (optimal for feeding GPU)."
         WHISPER_CMD_ARGS+=( -t "$GPU_FEED_THREADS" )
     else
-        echo "   -> Forcing CPU (-ng flag)."
-        echo "   -> Setting CPU threads to $NUM_THREADS (max)."
-        WHISPER_CMD_ARGS+=( -t "$NUM_THREADS" )
-        WHISPER_CMD_ARGS+=( -ng )
+        WHISPER_CMD_ARGS+=( -t "$NUM_THREADS" -ng )
     fi
 
-    # *** FLEXIBLE TASK ***
     if [ "$TASK" = "translate" ]; then
-        echo "   -> Task set to: translate (adding -tr flag)."
         WHISPER_CMD_ARGS+=( -tr )
-    else
-        echo "   -> Task set to: transcribe."
     fi
 
-    # --- VAD OPTIMIZATION ---
     if [ "$USE_VAD" = true ]; then
-        echo "   -> VAD enabled (skipping silence)."
-        WHISPER_CMD_ARGS+=( --vad )
-        WHISPER_CMD_ARGS+=( -vm "$VAD_MODEL_PATH" )
+        WHISPER_CMD_ARGS+=( --vad -vm "$VAD_MODEL_PATH" )
     fi
 
-    # Add output flags
-    WHISPER_CMD_ARGS+=( -osrt )
-    WHISPER_CMD_ARGS+=( -of "$TEMP_SRT_BASE_PATH" )
-    
-    # --- ADD PROGRESS BAR ---
-    # This flag tells whisper-cli to print progress to stderr.
-    WHISPER_CMD_ARGS+=( -pp )
-    
-    # Execute whisper.cpp ("Try 1", with VAD if enabled)
-    # We pipe stderr (2>) to 'tee'
-    # 'tee' sends one copy to our log file and another copy to >&2 (stderr)
-    # This lets the user see the progress bar in real-time.
-    if ! "$WHISPER_EXECUTABLE" "${WHISPER_CMD_ARGS[@]}" 2> >(tee "$WHISPER_LOG" >&2); then
-        
-        # --- "Catch" Block ---
-        exit_code=$?
-        
-        # --- CTRL+C (130) CHECK ---
-        if [ "$exit_code" -eq 130 ]; then
-            # 130 is the exit code for SIGINT (CTRL+C)
-            echo -e "\n   ${YELLOW}[INTERRUPT]${RESET} CTRL+C detected during Whisper. Exiting..."
-            rm -f "$WHISPER_LOG"
-            exit 130 # This will trigger the main EXIT trap
-        fi
-        
-        # --- *** NEW: AUTO-RETRY LOGIC *** ---
-        # Check if VAD was enabled on this failed attempt.
+    WHISPER_CMD_ARGS+=( -osrt -of "$TEMP_SRT_BASE_PATH" -pp )
+
+    # Run whisper in background, redirect ALL output to log, show progress bar
+    rm -f "$WHISPER_LOG"
+    "$WHISPER_EXECUTABLE" "${WHISPER_CMD_ARGS[@]}" >> "$WHISPER_LOG" 2>&1 &
+    WHISPER_PID=$!
+
+    # show_progress_bar tails the log file for "progress = N%" lines.
+    # It returns the exit code of the background process.
+    set +e
+    show_progress_bar "$WHISPER_LOG" "$WHISPER_PID"
+    WHISPER_EXIT=$?
+    set -e
+
+    if [ "$WHISPER_EXIT" -eq 130 ]; then
+        printf "\n"
+        warn "Interrupted during transcription."
+        rm -f "$WHISPER_LOG" "$TEMP_WAV_PATH"
+        exit 130
+    fi
+
+    if [ "$WHISPER_EXIT" -ne 0 ]; then
+        # --- AUTO-RETRY WITHOUT VAD ---
         if [ "$USE_VAD" = true ]; then
-            # VAD was on. This is likely the malloc() crash.
-            echo -e "   ${YELLOW}[RETRY]${RESET} Whisper.cpp failed with VAD enabled (Code: $exit_code)." >&2
-            echo -e "   -> Suspected VAD-related crash. Retrying *without* VAD..."
-            
-            # Re-build the command arguments, but *force* VAD to be off.
-            # We must re-build from scratch to safely remove VAD args.
+            printf "   ${YELLOW}⚠ Phase 2${RESET}  VAD crash — retrying without VAD...  "
+
             WHISPER_CMD_ARGS_RETRY=(
                 -m "$WHISPER_MODEL"
                 -f "$TEMP_WAV_PATH"
                 -l "$LANGUAGE"
             )
-
-            # Copy thread/task/GPU logic
             if [ "$USE_CUDA" = true ]; then
                 export CUDA_VISIBLE_DEVICES=$NVIDIA_GPU_INDEX
                 WHISPER_CMD_ARGS_RETRY+=( -t "$GPU_FEED_THREADS" )
             else
-                WHISPER_CMD_ARGS_RETRY+=( -t "$NUM_THREADS" )
-                WHISPER_CMD_ARGS_RETRY+=( -ng )
+                WHISPER_CMD_ARGS_RETRY+=( -t "$NUM_THREADS" -ng )
             fi
-
             if [ "$TASK" = "translate" ]; then
                 WHISPER_CMD_ARGS_RETRY+=( -tr )
             fi
+            WHISPER_CMD_ARGS_RETRY+=( -osrt -of "$TEMP_SRT_BASE_PATH" -pp )
 
-            # Add output flags
-            WHISPER_CMD_ARGS_RETRY+=( -osrt )
-            WHISPER_CMD_ARGS_RETRY+=( -of "$TEMP_SRT_BASE_PATH" )
-            WHISPER_CMD_ARGS_RETRY+=( -pp )
-            
-            # --- "Try 2 (Without VAD)" ---
-            if ! "$WHISPER_EXECUTABLE" "${WHISPER_CMD_ARGS_RETRY[@]}" 2> >(tee "$WHISPER_LOG" >&2); then
-                # This *second* attempt failed. This is a fatal error for this file.
-                retry_exit_code=$?
-                if [ "$retry_exit_code" -eq 130 ]; then
-                    echo -e "\n   ${YELLOW}[INTERRUPT]${RESET} CTRL+C detected during retry. Exiting..."
-                    rm -f "$WHISPER_LOG"
-                    exit 130
-                fi
-                
-                echo -e "   ${RED}[FATAL ERROR]${RESET} Whisper.cpp failed *again* even with VAD disabled (Code: $retry_exit_code)." >&2
-                log_error "$VIDEO_PATH" "Whisper.cpp failed on retry (VAD off). (Code: $retry_exit_code)."
-                echo -e "   -> ${YELLOW}Leaving temp WAV file for debugging: $TEMP_WAV_PATH${RESET}"
-                rm -f "$WHISPER_LOG"
-                continue # Give up on this file, move to the next.
+            rm -f "$WHISPER_LOG"
+            "$WHISPER_EXECUTABLE" "${WHISPER_CMD_ARGS_RETRY[@]}" >> "$WHISPER_LOG" 2>&1 &
+            RETRY_PID=$!
+
+            set +e
+            show_progress_bar "$WHISPER_LOG" "$RETRY_PID"
+            RETRY_EXIT=$?
+            set -e
+
+            if [ "$RETRY_EXIT" -eq 130 ]; then
+                printf "\n"
+                warn "Interrupted during retry."
+                rm -f "$WHISPER_LOG" "$TEMP_WAV_PATH"
+                exit 130
             fi
-            
-            # If we are here, the *retry* (Try 2) was successful!
-            echo -e "   ${GREEN}[SUCCESS]${RESET} Retry without VAD was successful."
-            # The script will now proceed to the CUDA checks and Phase 3 as normal.
 
+            if [ "$RETRY_EXIT" -ne 0 ]; then
+                err "Transcription failed (VAD off retry also failed, code: $RETRY_EXIT)."
+                log_error "$VIDEO_PATH" "Whisper failed on both VAD and non-VAD attempts (code: $RETRY_EXIT)."
+                hint "Temp WAV kept for debugging: $TEMP_WAV_PATH"
+                rm -f "$WHISPER_LOG"
+                FILES_FAILED=$((FILES_FAILED + 1))
+                continue
+            fi
+            hint "Retry without VAD succeeded."
         else
-            # VAD was *already* off. This is a non-VAD-related crash.
-            echo -e "   ${RED}[ERROR]${RESET} Whisper.cpp failed to transcribe $VIDEO_FILENAME (Code: $exit_code)." >&2
-            echo -e "   -> VAD was *disabled*, so this is a different issue." >&2
-            log_error "$VIDEO_PATH" "Whisper.cpp crashed or failed with VAD disabled (Code: $exit_code)."
-            echo -e "   -> The error message from whisper-cli should be visible directly above this message." >&2
-            echo -e "   -> ${YELLOW}Leaving temp WAV file for debugging: $TEMP_WAV_PATH${RESET}"
+            err "Transcription failed (code: $WHISPER_EXIT)."
+            log_error "$VIDEO_PATH" "Whisper failed with VAD disabled (code: $WHISPER_EXIT)."
+            hint "Temp WAV kept for debugging: $TEMP_WAV_PATH"
             rm -f "$WHISPER_LOG"
-            continue # Give up on this file, move to the next.
-        fi
-        # --- *** END NEW RETRY LOGIC *** ---
-        
-    fi
-    
-    # --- *** NEW, SMARTER CUDA SILENT FAILURE CHECK *** ---
-    if [ "$USE_CUDA" = true ]; then
-        # Check if CUDA *failed* to initialize.
-        if grep -q "failed to initialize CUDA" "$WHISPER_LOG"; then
-            echo -e "   ${RED}[ERROR]${RESET} ${BOLD}CUDA RUNTIME FAILURE DETECTED.${RESET}" >&2
-            echo -e "   -> ${YELLOW}Log shows: 'failed to initialize CUDA: CUDA driver version is insufficient for CUDA runtime version'${RESET}" >&2
-            echo -e "   -> ${BOLD}ACTION REQUIRED: You must update your NVIDIA drivers on your host Windows machine.${RESET}" >&2
-            echo -e "   -> After updating, reboot your computer and re-run this script." >&2
-            rm -f "$WHISPER_LOG"
-            # We exit the whole script here. Skipping is pointless as all files will fail.
-            exit 1
-        
-        # Check if CUDA *succeeded*
-        elif ! grep -q "ggml_cuda_init" "$WHISPER_LOG"; then
-            echo -e "   ${RED}[ERROR]${RESET} ${BOLD}CUDA SILENT FAILURE DETECTED.${RESET}" >&2
-            echo -e "   -> ${YELLOW}Whisper-cli ran but did NOT initialize the CUDA GPU.${RESET}" >&2
-            echo -e "   -> This means it fell back to CPU, which is why it's so slow." >&2
-            echo -e "   -> This is likely a VRAM error (model too large) or a build issue (cuBLAS mismatch)." >&2
-            echo -e "   -> ${YELLOW}Try using a smaller model (e.g., 'small.en') or a more quantized model.${RESET}" >&2
-            echo -e "   -> ${YELLOW}Leaving temp WAV file for debugging: $TEMP_WAV_PATH${RESET}"
-            log_error "$VIDEO_PATH" "CUDA silent failure. Whisper-cli fell back to CPU."
-            rm -f "$WHISPER_LOG"
+            FILES_FAILED=$((FILES_FAILED + 1))
             continue
-        else
-            echo -e "   ${GREEN}[SUCCESS]${RESET} CUDA runtime validated (found 'ggml_cuda_init' in log)."
         fi
     fi
-    rm -f "$WHISPER_LOG" # Clean up the whisper log
-    # --- END NEW CHECK ---
-    
-    # Enhanced check for silent failures
-    # Check if the transcription run was successful (Exit Code 0) AND produced the file
+
+    # ------------------------------------------------------------------
+    # CUDA VALIDATION (from log — not shown to user unless there's a problem)
+    # ------------------------------------------------------------------
+    if [ "$USE_CUDA" = true ]; then
+        if grep -q "failed to initialize CUDA" "$WHISPER_LOG" 2>/dev/null; then
+            err "CUDA runtime failure — driver version insufficient."
+            hint "Update your NVIDIA drivers on Windows, reboot, and retry."
+            rm -f "$WHISPER_LOG"
+            exit 1
+        elif ! grep -q "ggml_cuda_init" "$WHISPER_LOG" 2>/dev/null; then
+            err "CUDA silent failure — whisper fell back to CPU."
+            hint "Possible VRAM overflow. Try a smaller model (e.g. medium.en or medium.en-q5_0)."
+            log_error "$VIDEO_PATH" "CUDA silent failure — whisper fell back to CPU."
+            hint "Temp WAV kept for debugging: $TEMP_WAV_PATH"
+            rm -f "$WHISPER_LOG"
+            FILES_FAILED=$((FILES_FAILED + 1))
+            continue
+        fi
+
+        # One-time GPU diagnostics after the FIRST successful transcription
+        if [ "$GPU_VERIFIED" = false ]; then
+            gpu_diagnostics "$WHISPER_LOG" "$WAV_DURATION_INT"
+            GPU_VERIFIED=true
+        fi
+    fi
+    rm -f "$WHISPER_LOG"
+
+    # ------------------------------------------------------------------
+    # SRT existence check
+    # ------------------------------------------------------------------
     if [ ! -f "$EXPECTED_SRT_PATH" ]; then
-        echo -e "   ${RED}[ERROR]${RESET} Whisper.cpp execution finished (Exit Code 0), but no SRT file was generated." >&2
-        echo -e "   -> This indicates a silent failure (e.g., a CUDA issue not caught by the exit code)." >&2
-        echo -e "   -> Expected file at: $EXPECTED_SRT_PATH"
-        echo -e "   -> ${YELLOW}Leaving temp WAV file for debugging: $TEMP_WAV_PATH${RESET}"
-        log_error "$VIDEO_PATH" "Whisper.cpp ran but produced no SRT file (Silent failure)."
+        err "Whisper exited cleanly but produced no SRT file (silent failure)."
+        hint "Expected: $EXPECTED_SRT_PATH"
+        hint "Temp WAV kept for debugging: $TEMP_WAV_PATH"
+        log_error "$VIDEO_PATH" "Whisper ran but produced no SRT (silent failure)."
+        FILES_FAILED=$((FILES_FAILED + 1))
         continue
     fi
 
-    echo -e "   ${GREEN}[SUCCESS]${RESET} Phase 2 Complete: Transcription successful."
+    # ------------------------------------------------------------------
+    # PHASE 3: Delivery
+    # ------------------------------------------------------------------
+    printf "   ${BLUE}Phase 3${RESET}  Delivering SRT...      "
 
-    # --- PHASE 3: DELIVERY AND CLEANUP ---
-    
-    echo -e "   ${BLUE}[Phase 3]${RESET} Delivering SRT file..."
-    # 1. Deliver the final artifact back to the Windows mounted path
-    cp "$EXPECTED_SRT_PATH" "$FINAL_SRT_PATH"
-
-    if [ $? -eq 0 ]; then
-        echo -e "   ${GREEN}[SUCCESS]${RESET} SRT file delivered to: $FINAL_SRT_PATH"
-        # 2. Cleanup (The Responsible Engineer)
-        rm -f "$TEMP_WAV_PATH"
-        rm -f "$EXPECTED_SRT_PATH"
+    if cp "$EXPECTED_SRT_PATH" "$FINAL_SRT_PATH"; then
+        rm -f "$TEMP_WAV_PATH" "$EXPECTED_SRT_PATH"
+        FILE_ELAPSED=$(( $(date +%s) - FILE_START_TIME ))
+        ELAPSED_FMT=$(printf "%dm%02ds" $((FILE_ELAPSED/60)) $((FILE_ELAPSED%60)))
+        echo -e "${GREEN}✔${RESET}  (took ${ELAPSED_FMT})"
+        FILES_OK=$((FILES_OK + 1))
     else
-        echo -e "   ${RED}[ERROR]${RESET} Failed to copy final SRT to Windows path. Keeping temp files for debugging." >&2
-        log_error "$VIDEO_PATH" "Failed to copy final SRT from temp to destination."
+        printf "\n"
+        err "Failed to copy SRT to destination."
+        hint "Dest: $FINAL_SRT_PATH"
+        log_error "$VIDEO_PATH" "Failed to copy SRT from temp to destination."
+        FILES_FAILED=$((FILES_FAILED + 1))
     fi
-
-    echo -e "${BLUE}--- Finished $VIDEO_FILENAME ---${RESET}"
 
 done
 
-# --- FINAL SUMMARY ---
-# The 'trap cleanup EXIT' will run here automatically.
-# No 'rmdir' command is needed.
+# ---------------------------------------------------------------------------
+# FINAL SUMMARY
+# ---------------------------------------------------------------------------
+BATCH_ELAPSED=$(( $(date +%s) - BATCH_START_TIME ))
+BATCH_FMT=$(printf "%dh %dm %02ds" $((BATCH_ELAPSED/3600)) $(( (BATCH_ELAPSED%3600)/60 )) $((BATCH_ELAPSED%60)))
+
+section "BATCH COMPLETE"
+echo ""
+info "Total time:"    "$BATCH_FMT"
+info "Processed:"     "$TOTAL_FILES file(s)"
+echo -e "   ${GREEN}✔ Success:${RESET}  ${FILES_OK}"
+[ "$FILES_SKIPPED" -gt 0 ] && echo -e "   ${YELLOW}⟳ Skipped:${RESET}  ${FILES_SKIPPED}  (SRT already existed)"
+[ "$FILES_FAILED"  -gt 0 ] && echo -e "   ${RED}✘ Failed:${RESET}   ${FILES_FAILED}  (see: $ERROR_LOG_FILE)"
+echo ""
