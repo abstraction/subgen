@@ -1,0 +1,67 @@
+# ==========================================
+# 1. CMake & Build Artifacts
+# ==========================================
+build/
+CMakeCache.txt
+CMakeFiles/
+CMakeCheckOutputs/
+Makefile
+cmake_install.cmake
+*.so
+*.dll
+*.dylib
+*.a
+*.lib
+*.out
+*.app
+
+# ==========================================
+# 2. Machine Learning Models & Heavy Binaries
+# ==========================================
+# Prevents large weights from accidentally being pushed to GitHub
+*.bin
+*.onnx
+*.gguf
+*.pt
+*.pth
+# Even though whisper.cpp has its own internal ignore rules, 
+# this acts as a global safety fallback for your models directory
+**/models/*.bin
+
+# ==========================================
+# 3. Development Tools & Shell Configuration
+# ==========================================
+.history/
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+.env
+.env.*
+!.env.example
+
+# ==========================================
+# 4. Operating System Clutter
+# ==========================================
+# Windows host files that leak via WSL shared mounts
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# Linux/WSL clutter
+.DS_Store
+*.swp
+*~
+.fuse_hidden*
+
+# ==========================================
+# 5. Language Runtimes (If using Python/Node wrappers)
+# ==========================================
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.venv/
+node_modules/
+npm-debug.log*
