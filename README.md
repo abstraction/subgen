@@ -56,7 +56,7 @@ subgen/
 ### 1. Clone & initialise the submodule
 
 ```bash
-git clone --recurse-submodules https://github.com/abstration/subgen.git
+git clone --recurse-submodules https://github.com/abstraction/subgen.git
 cd subgen
 ```
 
