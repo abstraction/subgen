@@ -50,13 +50,43 @@ VAD_MODEL_PATH="$WHISPER_SUBMODULE_DIR/models/ggml-$VAD_MODEL_NAME.bin"
 # ---------------------------------------------------------------------------
 NUM_THREADS=$(nproc)
 
-if [ $# -ne 1 ]; then
-    echo -e "${RED}Usage: $0 \"/path/to/windows/video/folder\"${RESET}" >&2
+INPUT_DIR=""
+
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        -l|--lang)
+            LANGUAGE="$2"
+            shift 2
+            ;;
+        -a|--auto)
+            LANGUAGE="auto"
+            shift 1
+            ;;
+        -*)
+            echo -e "${RED}Unknown option: $1${RESET}" >&2
+            exit 1
+            ;;
+        *)
+            if [ -z "$INPUT_DIR" ]; then
+                INPUT_DIR="$1"
+                shift 1
+            else
+                echo -e "${RED}Too many arguments. Only one input directory is allowed.${RESET}" >&2
+                exit 1
+            fi
+            ;;
+    esac
+done
+
+if [ -z "$INPUT_DIR" ]; then
+    echo -e "${RED}Usage: $0 [options] \"/path/to/windows/video/folder\"${RESET}" >&2
+    echo -e "${YELLOW}Options:${RESET}" >&2
+    echo -e "${YELLOW}  -l, --lang <lang>   Set specific language (e.g., 'es', 'fr')${RESET}" >&2
+    echo -e "${YELLOW}  -a, --auto          Enable multilingual auto-detection (sets language to 'auto')${RESET}" >&2
     echo -e "${YELLOW}Example: $0 \"/mnt/c/Users/User/Videos/Client Project\"${RESET}" >&2
+    echo -e "${YELLOW}Example: $0 --auto \"/mnt/c/Users/User/Videos/Client Project\"${RESET}" >&2
     exit 1
 fi
-
-INPUT_DIR="$1"
 ERROR_LOG_FILE="$INPUT_DIR/transcription_errors.log"
 TEMP_DIR="/tmp/whisper_pipeline_$(date +%s)"
 mkdir -p "$TEMP_DIR"

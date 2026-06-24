@@ -181,8 +181,13 @@ nvcc --version
 ## Usage
 
 ```bash
-./subgen.sh "/mnt/c/Users/YourName/Videos/ProjectFolder"
+./subgen.sh [options] "/mnt/c/Users/YourName/Videos/ProjectFolder"
 ```
+
+### Options
+
+- `-a, --auto`: Enable multilingual auto-detection (sets language to `auto`)
+- `-l, --lang <lang>`: Set specific language (e.g., `es`, `fr`)
 
 The script will:
 
@@ -196,11 +201,18 @@ The script will:
 ### Example
 
 ```bash
+# Standard English run:
 ./subgen.sh "/mnt/c/Users/Alice/Videos/Lectures"
 # output:
 # /mnt/c/Users/Alice/Videos/Lectures/lecture_01.srt
 # /mnt/c/Users/Alice/Videos/Lectures/lecture_02.srt
 # ...
+
+# Multilingual run (auto-detect language):
+./subgen.sh --auto "/mnt/c/Users/Alice/Videos/Lectures"
+
+# Specific language run (e.g., French):
+./subgen.sh --lang fr "/mnt/c/Users/Alice/Videos/Lectures"
 ```
 
 [↑ Back to top](#subgen)
@@ -239,7 +251,7 @@ subgen "/mnt/c/Users/YourName/Videos/ProjectFolder"
 
 ## Configuration
 
-All options live at the top of `subgen.sh`. No flags needed at runtime.
+Most options live at the top of `subgen.sh`, though language can be overridden at runtime using flags.
 
 | Variable             | Default         | Description                                                  |
 | -------------------- | --------------- | ------------------------------------------------------------ |
@@ -311,16 +323,11 @@ VRAM usage varies significantly depending on context size and runtime settings.
 
 ### English language forcing
 
-Because `large-v3` is multilingual, it auto-detects the language from audio. For English-only content, always pass `-l en` to prevent mis-detection:
+Because `large-v3` is multilingual, it auto-detects the language from audio. For English-only content, `subgen.sh` locks the language to English by default (`LANGUAGE="en"`). This prevents `whisper-cli` from hallucinating or mis-detecting languages on noisy English audio.
 
-```bash
-./build/bin/whisper-cli \
-  -m models/ggml-large-v3-q5_0.bin \
-  -l en \
-  audio.wav
-```
-
-`subgen.sh` passes `LANGUAGE="en"` by default, so no manual change is needed unless you want multilingual output.
+If you want multilingual output or auto-detection, use the runtime flags:
+- Pass `--auto` or `-a` to let Whisper guess the language automatically.
+- Pass `--lang <lang_code>` or `-l <lang_code>` (e.g., `--lang fr`) to lock it to a specific non-English language.
 
 ### Manual quantization
 
@@ -352,7 +359,7 @@ Then set `WHISPER_MODEL_NAME="large-v3-q8_0"` in `subgen.sh`.
 | Best overall (default)            | `large-v3-q5_0` + `LANGUAGE=en`      |
 | Maximum quantized quality         | `large-v3-q8_0`                      |
 | Speed over accuracy               | `medium.en-q5_0`                     |
-| Multilingual / language switching | `large-v3-q5_0` (omit `LANGUAGE=en`) |
+| Multilingual / language switching | `large-v3-q5_0` (run with `--auto`)  |
 
 [↑ Back to top](#subgen)
 
