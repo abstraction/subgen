@@ -36,8 +36,6 @@ subgen/
 - [Future Work](#future-work)
 - [License](#license)
 
----
-
 ## Prerequisites
 
 | Requirement              | Notes                                                                                                       |
@@ -48,8 +46,6 @@ subgen/
 | `cmake` >= 3.14          | `sudo apt install cmake build-essential`                                                                    |
 | `ffmpeg`                 | `sudo apt install ffmpeg`                                                                                   |
 | `git`                    | For cloning and submodule init                                                                              |
-
----
 
 ## Setup
 
@@ -138,8 +134,6 @@ Downloads `ggml-silero-v5.1.2.bin` (~864 KB) into `whisper.cpp/models/`.
 
 [↑ Back to top](#subgen)
 
----
-
 ## CUDA Setup (WSL)
 
 ### Driver architecture
@@ -184,8 +178,6 @@ nvcc --version
 
 [↑ Back to top](#subgen)
 
----
-
 ## Usage
 
 ```bash
@@ -212,8 +204,6 @@ The script will:
 ```
 
 [↑ Back to top](#subgen)
-
----
 
 ## Add to PATH
 
@@ -247,8 +237,6 @@ subgen "/mnt/c/Users/YourName/Videos/ProjectFolder"
 
 [↑ Back to top](#subgen)
 
----
-
 ## Configuration
 
 All options live at the top of `subgen.sh`. No flags needed at runtime.
@@ -275,8 +263,6 @@ See the **[Model Reference](#model-reference)** section below for a full breakdo
 
 [↑ Back to top](#subgen)
 
----
-
 ## Model Reference
 
 ### `.en` vs multilingual models
@@ -292,8 +278,6 @@ See the **[Model Reference](#model-reference)** section below for a full breakdo
 
 `large-v3` is **multilingual only** — there's no official `large-v3.en`. It handles English fine; just pass `-l en` to lock the language and stop it from guessing wrong.
 
----
-
 ### Quantization tiers
 
 Quantization swaps 16-bit float weights for smaller integers, cutting file size and VRAM at a small accuracy cost.
@@ -308,8 +292,6 @@ Quantization swaps 16-bit float weights for smaller integers, cutting file size 
 | `Q4`          | 4    | Noticeable    | Only worth it when VRAM is very tight     |
 
 The real-world gap between Q8 and Q5 is small. Most files produce identical transcripts. You're more likely to notice a difference with heavy accents, noisy audio, overlapping speakers, or dense technical vocabulary.
-
----
 
 ### Model comparison (RTX 3050 6 GB)
 
@@ -340,8 +322,6 @@ Because `large-v3` is multilingual, it auto-detects the language from audio. For
 
 `subgen.sh` passes `LANGUAGE="en"` by default, so no manual change is needed unless you want multilingual output.
 
----
-
 ### Manual quantization
 
 Pre-quantized models are available via the download script and are the easiest option:
@@ -365,8 +345,6 @@ bash ./models/download-ggml-model.sh large-v3
 
 Then set `WHISPER_MODEL_NAME="large-v3-q8_0"` in `subgen.sh`.
 
----
-
 ### Quick decision guide
 
 | Goal                              | Model to use                         |
@@ -377,8 +355,6 @@ Then set `WHISPER_MODEL_NAME="large-v3-q8_0"` in `subgen.sh`.
 | Multilingual / language switching | `large-v3-q5_0` (omit `LANGUAGE=en`) |
 
 [↑ Back to top](#subgen)
-
----
 
 ## Updating whisper.cpp
 
@@ -402,8 +378,6 @@ cd whisper.cpp && cmake -B build -DGGML_CUDA=1 && cmake --build build --config R
 
 [↑ Back to top](#subgen)
 
----
-
 ## Supported Video Formats
 
 `.mp4` · `.mkv` · `.avi` · `.webm` · `.ts` · `.mov`
@@ -411,8 +385,6 @@ cd whisper.cpp && cmake -B build -DGGML_CUDA=1 && cmake --build build --config R
 Detection is case-insensitive (`.MP4`, `.Mkv`, etc. all work).
 
 [↑ Back to top](#subgen)
-
----
 
 ## Robustness Features
 
@@ -425,8 +397,6 @@ Detection is case-insensitive (`.MP4`, `.Mkv`, etc. all work).
 - **Error log** — every failed file is recorded in `transcription_errors.log` so you can handle failures selectively.
 
 [↑ Back to top](#subgen)
-
----
 
 ## Troubleshooting
 
@@ -487,10 +457,6 @@ The current `whisper.cpp` CLI pipeline will remain the baseline until a measurab
 
 [↑ Back to top](#subgen)
 
----
-
 ## License
 
 [whisper.cpp](https://github.com/ggml-org/whisper.cpp) is a separate project with its own MIT License.
-
-[↑ Back to top](#subgen)
