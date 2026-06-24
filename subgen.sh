@@ -275,7 +275,7 @@ function gpu_diagnostics() {
     local encode_per_run
     encode_per_run=$(grep -oP 'encode time\s*=.*?\(\s*\K[0-9.]+(?=\s*ms per run)' "$log_file" 2>/dev/null | head -1 || true)
     if [[ -n "$encode_per_run" ]]; then
-        echo -e "   ${MAGENTA}│${RESET}  ${GREEN}✔${RESET} Encode speed:  ${BOLD}${encode_per_run} ms/pass${RESET}  (CPU would be ~3000-5000 ms)"
+        echo -e "   ${MAGENTA}│${RESET}  ${GREEN}✔${RESET} Encode speed:  ${BOLD}${encode_per_run} ms/pass${RESET}  (CPU on ${WHISPER_MODEL_NAME} would be much slower)"
     fi
 
     # 4. Real-time speed ratio
@@ -293,7 +293,7 @@ function gpu_diagnostics() {
         if [ "$ratio_int" -ge 5 ]; then
             echo -e "   ${MAGENTA}│${RESET}"
             echo -e "   ${MAGENTA}│${RESET}  ${GREEN}${BOLD}   ✓ VERDICT: GPU is confirmed active.${RESET}"
-            echo -e "   ${MAGENTA}│${RESET}  ${DIM}   (>5× real-time on large-v3-q5_0 is impossible on CPU)${RESET}"
+            echo -e "   ${MAGENTA}│${RESET}  ${DIM}   (>5× real-time on ${WHISPER_MODEL_NAME} is highly unlikely on CPU)${RESET}"
         else
             echo -e "   ${MAGENTA}│${RESET}"
             echo -e "   ${MAGENTA}│${RESET}  ${YELLOW}${BOLD}   ⚠ VERDICT: Speed is suspiciously low.${RESET}"

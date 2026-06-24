@@ -15,7 +15,7 @@ subgen/
     └── models/
         ├── download-ggml-model.sh
         ├── download-vad-model.sh
-        ├── ggml-large-v3-q5_0.bin      ← main transcription model
+        ├── ggml-large-v3.bin           ← main transcription model
         └── ggml-silero-v5.1.2.bin      ← VAD model (optional but recommended)
 ```
 
@@ -100,19 +100,19 @@ sudo apt install ffmpeg
 
 ```bash
 cd whisper.cpp/models
-bash download-ggml-model.sh large-v3-q5_0
+bash download-ggml-model.sh large-v3
 cd ../..
 ```
 
-Downloads `ggml-large-v3-q5_0.bin` (~1.0 GB) into `whisper.cpp/models/`.
+Downloads `ggml-large-v3.bin` into `whisper.cpp/models/`.
 
-> **Why large-v3-q5_0?** Whisper large-v3 is OpenAI's most accurate speech recognition model. The `q5_0` variant quantizes weights to 5-bit integers, reducing model memory requirements from roughly ~6 GB to around ~2 GB during inference (exact usage depends on context and build settings) with barely any accuracy cost. That's what makes it a good fit for 4-6 GB cards like the RTX 3050 6 GB.
+> **Why large-v3?** Whisper large-v3 is OpenAI's most accurate speech recognition model. It requires a moderate amount of VRAM (usually around 4-5 GB) during inference, fitting comfortably on 6 GB cards like the RTX 3050. For smaller GPUs, you can use quantized variants like `q5_0`.
 
 Verify the model and GPU are working with the bundled JFK sample:
 
 ```bash
 cd whisper.cpp
-./build/bin/whisper-cli -m models/ggml-large-v3-q5_0.bin -l en -f samples/jfk.wav
+./build/bin/whisper-cli -m models/ggml-large-v3.bin -l en -f samples/jfk.wav
 ```
 
 You should see a transcript. `ggml_cuda_init` in the output confirms the GPU was picked up.
@@ -255,7 +255,7 @@ Most options live at the top of `subgen.sh`, though language can be overridden a
 
 | Variable             | Default         | Description                                                  |
 | -------------------- | --------------- | ------------------------------------------------------------ |
-| `WHISPER_MODEL_NAME` | `large-v3-q5_0` | Whisper model variant to use                                 |
+| `WHISPER_MODEL_NAME` | `large-v3`      | Whisper model variant to use                                 |
 | `LANGUAGE`           | `en`            | Spoken language code                                         |
 | `TASK`               | `transcribe`    | `transcribe` or `translate` (to English)                     |
 | `USE_CUDA`           | `true`          | Enable NVIDIA GPU acceleration                               |
@@ -305,19 +305,19 @@ Quantization swaps 16-bit float weights for smaller integers, cutting file size 
 
 The real-world gap between Q8 and Q5 is small. Most files produce identical transcripts. You're more likely to notice a difference with heavy accents, noisy audio, overlapping speakers, or dense technical vocabulary.
 
-### Model comparison (RTX 3050 6 GB)
+### Model comparison
 
-VRAM usage varies significantly depending on context size and runtime settings.
+VRAM usage varies significantly depending on context size and runtime settings. The below are approximations.
 
-| Model             | File size | VRAM est. | Quality       | Languages | Best for                            |
-| ----------------- | --------- | --------- | ------------- | --------- | ----------------------------------- |
-| `large-v3-q5_0`   | ~1.0 GB   | ~1.9 GB   | Excellent     | 99        | **Default, best all-rounder**       |
-| `large-v3-q8_0`   | ~1.6 GB   | ~2.9 GB   | Near-lossless | 99        | Maximum quantized quality           |
-| `large-v3` (FP16) | ~2.9 GB   | ~5.8 GB   | Baseline      | 99        | 8 GB+ VRAM only                     |
-| `medium.en-q5_0`  | ~0.5 GB   | ~1.0 GB   | Good          | English   | Speed priority or low-VRAM fallback |
-| `medium.en`       | ~1.5 GB   | ~2.9 GB   | Good          | English   | Unquantized medium baseline         |
+| Model             | VRAM Need | Quality       | Languages | Best for                            |
+| ----------------- | --------- | ------------- | --------- | ----------------------------------- |
+| `large-v3` (FP16) | Moderate  | Baseline      | 99        | **Default, best all-rounder**       |
+| `large-v3-q8_0`   | Moderate  | Near-lossless | 99        | Maximum quantized quality           |
+| `large-v3-q5_0`   | Low       | Excellent     | 99        | Good balance for smaller GPUs       |
+| `medium.en`       | Moderate  | Good          | English   | Unquantized medium baseline         |
+| `medium.en-q5_0`  | Low       | Good          | English   | Speed priority or low-VRAM fallback |
 
-> `large-v3-q5_0` fits comfortably on the RTX 3050 6 GB. `large-v3-q8_0` fits too. Full `large-v3` (FP16) is borderline, so stick with `q5_0` unless you specifically need FP16.
+> `large-v3` (FP16) fits comfortably on most 6 GB cards like the RTX 3050. If you are extremely tight on VRAM, you can use a quantized model like `q5_0`.
 
 ---
 
@@ -331,7 +331,7 @@ If you want multilingual output or auto-detection, use the runtime flags:
 
 ### Manual quantization
 
-Pre-quantized models are available via the download script and are the easiest option:
+Smaller pre-quantized models are available via the download script and are the easiest option if you are low on VRAM:
 
 ```bash
 bash ./models/download-ggml-model.sh large-v3-q5_0
@@ -356,10 +356,10 @@ Then set `WHISPER_MODEL_NAME="large-v3-q8_0"` in `subgen.sh`.
 
 | Goal                              | Model to use                         |
 | --------------------------------- | ------------------------------------ |
-| Best overall (default)            | `large-v3-q5_0` + `LANGUAGE=en`      |
+| Best overall (default)            | `large-v3` + `LANGUAGE=en`           |
 | Maximum quantized quality         | `large-v3-q8_0`                      |
 | Speed over accuracy               | `medium.en-q5_0`                     |
-| Multilingual / language switching | `large-v3-q5_0` (run with `--auto`)  |
+| Multilingual / language switching | `large-v3` (run with `--auto`)       |
 
 [↑ Back to top](#subgen)
 
@@ -410,7 +410,7 @@ Detection is case-insensitive (`.MP4`, `.Mkv`, etc. all work).
 | Symptom                                       | Fix                                                                                                                   |
 | --------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
 | `whisper-cli: not found`                      | Run the cmake build step inside `whisper.cpp/`.                                                                       |
-| Model not found                               | Run `bash whisper.cpp/models/download-ggml-model.sh large-v3-q5_0`.                                                   |
+| Model not found                               | Run `bash whisper.cpp/models/download-ggml-model.sh large-v3`.                                                        |
 | `VAD model not found`                         | Run `bash whisper.cpp/models/download-vad-model.sh silero-v5.1.2`, or set `USE_VAD=false` in `subgen.sh`.             |
 | CUDA silent failure (fell back to CPU)        | Not enough VRAM. Try `medium.en-q5_0` (~1.0 GB VRAM).                                                                 |
 | `failed to initialize CUDA`                   | Update NVIDIA drivers on the **Windows** host, then reboot.                                                           |
@@ -425,7 +425,7 @@ Detection is case-insensitive (`.MP4`, `.Mkv`, etc. all work).
 
 ### Persistent transcription worker
 
-The current pipeline uses `whisper.cpp` with CUDA acceleration and the `large-v3-q5_0` model. It is already optimized for local GPU inference and includes VAD support, progress reporting, error handling, and automatic resume handling.
+The current pipeline uses `whisper.cpp` with CUDA acceleration and the `large-v3` model. It is already optimized for local GPU inference and includes VAD support, progress reporting, error handling, and automatic resume handling.
 
 One area for improvement is the current process lifecycle. At the moment, each video starts a new `whisper-cli` process, which means the model has to be loaded into GPU memory again for every file:
 
