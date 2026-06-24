@@ -1,24 +1,4 @@
 #!/bin/bash
-#
-# Title: WSL Batch Video Transcriber (Whisper.cpp Pipeline)
-# Description: Automates the batch transcription of videos using ffmpeg and whisper.cpp.
-#              Optimized for performance within the Windows Subsystem for Linux (WSL)
-#              environment, handling cross-OS paths and file cleanup.
-#
-# PROJECT STRUCTURE:
-#   subgen/
-#   ├── subgen.sh              <- This script
-#   └── whisper.cpp/           <- Git submodule (https://github.com/ggml-org/whisper.cpp)
-#       ├── build/bin/         <- Compiled whisper-cli executable
-#       └── models/            <- Model files (.bin) and download scripts
-#
-# USAGE:
-# 1. Init the submodule:  git submodule update --init --recursive
-# 2. Build whisper-cli:   cd whisper.cpp && cmake -B build -DGGML_CUDA=1 && cmake --build build -j$(nproc)
-# 3. Install ffmpeg:      sudo apt install ffmpeg
-# 4. Download the model:  cd whisper.cpp/models && bash download-ggml-model.sh large-v3-q5_0
-# 5. Download VAD model:  cd whisper.cpp/models && bash download-vad-model.sh silero-v5.1.2
-# 6. Run:                 ./subgen.sh "/mnt/c/Users/YourName/Videos/ProjectFolder"
 
 set -euo pipefail
 
@@ -36,7 +16,7 @@ MAGENTA=$(tput setaf 5)
 RESET=$(tput sgr0)
 
 # ---------------------------------------------------------------------------
-# ROBUST PATHING
+# PATHING
 # ---------------------------------------------------------------------------
 SCRIPT_DIR=$( cd -- "$( dirname -- "$( readlink -f "${BASH_SOURCE[0]}" )" )" &> /dev/null && pwd )
 
@@ -46,7 +26,7 @@ WHISPER_EXECUTABLE="$WHISPER_SUBMODULE_DIR/build/bin/whisper-cli"
 # ---------------------------------------------------------------------------
 # MODEL, LANGUAGE, AND TASK CONFIGURATION
 # ---------------------------------------------------------------------------
-WHISPER_MODEL_NAME="large-v3-q5_0"
+WHISPER_MODEL_NAME="large-v3"
 LANGUAGE="en"
 TASK="transcribe"
 WHISPER_MODEL="$WHISPER_SUBMODULE_DIR/models/ggml-$WHISPER_MODEL_NAME.bin"
@@ -62,8 +42,8 @@ GPU_FEED_THREADS=8
 # VAD (VOICE ACTIVITY DETECTION) CONFIGURATION
 # ---------------------------------------------------------------------------
 USE_VAD=true
-VAD_MODEL_NAME="ggml-silero-v5.1.2.bin"
-VAD_MODEL_PATH="$WHISPER_SUBMODULE_DIR/models/$VAD_MODEL_NAME"
+VAD_MODEL_NAME="silero-v6.2.0"
+VAD_MODEL_PATH="$WHISPER_SUBMODULE_DIR/models/ggml-$VAD_MODEL_NAME.bin"
 
 # ---------------------------------------------------------------------------
 # STATE & ARGUMENT VALIDATION
