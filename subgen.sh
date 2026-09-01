@@ -46,11 +46,26 @@ VAD_MODEL_NAME="silero-v6.2.0"
 VAD_MODEL_PATH="$WHISPER_SUBMODULE_DIR/models/ggml-$VAD_MODEL_NAME.bin"
 
 # ---------------------------------------------------------------------------
+# SUBTITLE FORMATTING & POST-PROCESSING CONFIGURATION
+# ---------------------------------------------------------------------------
+ENABLE_POSTPROCESS=true
+POSTPROCESS_SCRIPT="$SCRIPT_DIR/json_to_srt.py"
+MAX_CHARS_PER_LINE=40
+MAX_LINES_PER_CUE=2
+MIN_SUBTITLE_DURATION_MS=1200
+MAX_SUBTITLE_DURATION_MS=6000
+GAP_SNAP_MS=120
+MAX_CPS=20
+PAUSE_SPLIT_MS=800
+PYTHON_BIN="python3"
+
+# ---------------------------------------------------------------------------
 # STATE & ARGUMENT VALIDATION
 # ---------------------------------------------------------------------------
 NUM_THREADS=$(nproc)
 
 INPUT_DIR=""
+FORCE_REGEN=false
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -61,6 +76,18 @@ while [[ $# -gt 0 ]]; do
         -a|--auto)
             LANGUAGE="auto"
             shift 1
+            ;;
+        -f|--force)
+            FORCE_REGEN=true
+            shift 1
+            ;;
+        --no-postprocess)
+            ENABLE_POSTPROCESS=false
+            shift 1
+            ;;
+        --cpl)
+            MAX_CHARS_PER_LINE="$2"
+            shift 2
             ;;
         -*)
             echo -e "${RED}Unknown option: $1${RESET}" >&2
@@ -83,13 +110,13 @@ if [ -z "$INPUT_DIR" ]; then
     echo -e "${YELLOW}Options:${RESET}" >&2
     echo -e "${YELLOW}  -l, --lang <lang>   Set specific language (e.g., 'es', 'fr')${RESET}" >&2
     echo -e "${YELLOW}  -a, --auto          Enable multilingual auto-detection (sets language to 'auto')${RESET}" >&2
+    echo -e "${YELLOW}  -f, --force         Force regeneration even if SRT already exists${RESET}" >&2
     echo -e "${YELLOW}Example: $0 \"/mnt/c/Users/User/Videos/Client Project\"${RESET}" >&2
     echo -e "${YELLOW}Example: $0 --auto \"/mnt/c/Users/User/Videos/Client Project\"${RESET}" >&2
     exit 1
 fi
 ERROR_LOG_FILE="$INPUT_DIR/transcription_errors.log"
-TEMP_DIR="/tmp/whisper_pipeline_$(date +%s)"
-mkdir -p "$TEMP_DIR"
+TEMP_DIR=$(mktemp -d /tmp/whisper_pipeline_XXXXXX)
 
 # Batch-level counters and timer
 BATCH_START_TIME=$(date +%s)
@@ -129,6 +156,15 @@ hint() { echo -e "   ${DIM}→ ${1}${RESET}"; }
 # ---------------------------------------------------------------------------
 function cleanup() {
     local exit_code=$?
+
+    if [ -n "$WHISPER_PID" ] && kill -0 "$WHISPER_PID" 2>/dev/null; then
+        kill -TERM "$WHISPER_PID" 2>/dev/null || true
+        wait "$WHISPER_PID" 2>/dev/null || true
+    fi
+    if [ -n "$RETRY_PID" ] && kill -0 "$RETRY_PID" 2>/dev/null; then
+        kill -TERM "$RETRY_PID" 2>/dev/null || true
+        wait "$RETRY_PID" 2>/dev/null || true
+    fi
 
     echo ""
     if [ "$exit_code" -eq 130 ]; then
@@ -345,10 +381,25 @@ ok "model         $WHISPER_MODEL_NAME"
 if [ "$USE_VAD" = true ]; then
     if [ ! -f "$VAD_MODEL_PATH" ]; then
         err "VAD model not found at: $VAD_MODEL_PATH"
-        hint "Download: cd whisper.cpp/models && bash download-vad-model.sh silero-v5.1.2"
+        hint "Download: cd whisper.cpp/models && bash download-vad-model.sh $VAD_MODEL_NAME"
         exit 1
     fi
     ok "VAD model     $VAD_MODEL_NAME"
+fi
+
+if [ "$ENABLE_POSTPROCESS" = true ]; then
+    if ! command -v "$PYTHON_BIN" &> /dev/null; then
+        warn "python3 not found. Falling back to native Whisper SRT output."
+        ENABLE_POSTPROCESS=false
+    elif ! "$PYTHON_BIN" -c "import sys; sys.exit(0 if sys.version_info >= (3, 7) else 1)" 2>/dev/null; then
+        warn "python3 version is < 3.7. json_to_srt.py requires dataclasses. Falling back to native SRT."
+        ENABLE_POSTPROCESS=false
+    elif [ ! -f "$POSTPROCESS_SCRIPT" ]; then
+        warn "json_to_srt.py not found at $POSTPROCESS_SCRIPT. Falling back to native SRT."
+        ENABLE_POSTPROCESS=false
+    else
+        ok "postprocessor $(basename "$POSTPROCESS_SCRIPT") (${PYTHON_BIN})"
+    fi
 fi
 
 # ---------------------------------------------------------------------------
@@ -397,6 +448,9 @@ fi
 # ---------------------------------------------------------------------------
 section "PIPELINE CONFIGURATION"
 info "Input directory:"   "$INPUT_DIR"
+if [ "$FORCE_REGEN" = true ]; then
+    info "Force Regen:"       "enabled"
+fi
 info "Model:"             "$WHISPER_MODEL_NAME"
 info "Language:"          "$LANGUAGE"
 info "Task:"              "$TASK"
@@ -412,6 +466,7 @@ info "Error log:"         "$ERROR_LOG_FILE"
 # ---------------------------------------------------------------------------
 # FILE DISCOVERY
 # ---------------------------------------------------------------------------
+printf "   ${CYAN}%-22s${RESET} %s\n" "Scanning directory:" "Finding video files (this may take a minute on large drives)..."
 mapfile -t VIDEO_FILES < <(
     find "$INPUT_DIR" -type f \( \
         -iname "*.mp4" -o \
@@ -462,9 +517,13 @@ for VIDEO_PATH in "${VIDEO_FILES[@]}"; do
     # RESUME: skip if SRT already exists
     # ------------------------------------------------------------------
     if [ -f "$FINAL_SRT_PATH" ]; then
-        warn "Already done — SRT exists, skipping."
-        FILES_SKIPPED=$((FILES_SKIPPED + 1))
-        continue
+        if [ "$FORCE_REGEN" = false ]; then
+            warn "Already done — SRT exists, skipping."
+            FILES_SKIPPED=$((FILES_SKIPPED + 1))
+            continue
+        else
+            warn "SRT exists, but force regenerating..."
+        fi
     fi
 
     # ------------------------------------------------------------------
@@ -540,7 +599,10 @@ for VIDEO_PATH in "${VIDEO_FILES[@]}"; do
         WHISPER_CMD_ARGS+=( --vad -vm "$VAD_MODEL_PATH" )
     fi
 
-    WHISPER_CMD_ARGS+=( -osrt -of "$TEMP_SRT_BASE_PATH" -pp )
+    TEMP_JSON_PATH="$TEMP_SRT_BASE_PATH.json"
+    RAW_SRT_PATH="$TEMP_SRT_BASE_PATH.raw.srt"
+
+    WHISPER_CMD_ARGS+=( -ojf -osrt -of "$TEMP_SRT_BASE_PATH" -pp )
 
     # Run whisper in background, redirect ALL output to log, show progress bar
     rm -f "$WHISPER_LOG"
@@ -580,7 +642,7 @@ for VIDEO_PATH in "${VIDEO_FILES[@]}"; do
             if [ "$TASK" = "translate" ]; then
                 WHISPER_CMD_ARGS_RETRY+=( -tr )
             fi
-            WHISPER_CMD_ARGS_RETRY+=( -osrt -of "$TEMP_SRT_BASE_PATH" -pp )
+            WHISPER_CMD_ARGS_RETRY+=( -ojf -osrt -of "$TEMP_SRT_BASE_PATH" -pp )
 
             rm -f "$WHISPER_LOG"
             "$WHISPER_EXECUTABLE" "${WHISPER_CMD_ARGS_RETRY[@]}" >> "$WHISPER_LOG" 2>&1 &
@@ -654,6 +716,41 @@ for VIDEO_PATH in "${VIDEO_FILES[@]}"; do
         log_error "$VIDEO_PATH" "Whisper ran but produced no SRT (silent failure)."
         FILES_FAILED=$((FILES_FAILED + 1))
         continue
+    fi
+
+    # ------------------------------------------------------------------
+    # PHASE 2.5: Subtitle Post-Processing & Flow Optimization
+    # ------------------------------------------------------------------
+    if [ "$ENABLE_POSTPROCESS" = true ]; then
+        if [ -f "$TEMP_JSON_PATH" ]; then
+            printf "   ${BLUE}Phase 2.5${RESET} Optimizing flow...     "
+            POSTPROCESS_LOG="$TEMP_DIR/$VIDEO_BASENAME.postprocess.log"
+            PROCESSED_SRT_PATH="$TEMP_SRT_BASE_PATH.processed.srt"
+
+            if "$PYTHON_BIN" "$POSTPROCESS_SCRIPT" "$TEMP_JSON_PATH" \
+                -o "$PROCESSED_SRT_PATH" \
+                --max-cpl "$MAX_CHARS_PER_LINE" \
+                --max-lines "$MAX_LINES_PER_CUE" \
+                --min-dur "$MIN_SUBTITLE_DURATION_MS" \
+                --max-dur "$MAX_SUBTITLE_DURATION_MS" \
+                --gap-snap "$GAP_SNAP_MS" \
+                --max-cps "$MAX_CPS" \
+                --pause-split "$PAUSE_SPLIT_MS" > "$POSTPROCESS_LOG" 2>&1; then
+                
+                echo -e "${GREEN}✔${RESET}  (balanced & timed)"
+                mv "$PROCESSED_SRT_PATH" "$EXPECTED_SRT_PATH"
+                rm -f "$POSTPROCESS_LOG"
+            else
+                warn "Post-processor failed, falling back to raw Whisper SRT."
+                if [ -s "$POSTPROCESS_LOG" ]; then
+                    sed 's/^/             /' "$POSTPROCESS_LOG" >&2
+                fi
+                # Use raw SRT produced by -osrt (already at $EXPECTED_SRT_PATH)
+                rm -f "$POSTPROCESS_LOG" "$PROCESSED_SRT_PATH"
+            fi
+        else
+            warn "JSON output missing, skipping post-processing (falling back to raw SRT)."
+        fi
     fi
 
     # ------------------------------------------------------------------

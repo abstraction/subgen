@@ -188,11 +188,12 @@ nvcc --version
 
 - `-a, --auto`: Enable multilingual auto-detection (sets language to `auto`)
 - `-l, --lang <lang>`: Set specific language (e.g., `es`, `fr`)
+- `-f, --force`: Force regeneration even if an `.srt` file already exists
 
 The script will:
 
 1. Discover all `.mp4 .mkv .avi .webm .ts .mov` files in the given directory (recursive).
-2. Skip any video that already has a matching `.srt` beside it (resume-safe).
+2. Skip any video that already has a matching `.srt` beside it (resume-safe), unless `--force` is passed.
 3. Extract a mono 16 kHz WAV to `/tmp/` via ffmpeg.
 4. Transcribe with `whisper-cli` on your NVIDIA GPU.
 5. Write the `.srt` next to the original video and clean up temp files.
@@ -382,6 +383,21 @@ Rebuild after updating:
 ```bash
 cd whisper.cpp && cmake -B build -DGGML_CUDA=1 && cmake --build build --config Release -j$(nproc)
 ```
+
+[↑ Back to top](#subgen)
+
+## Subtitle Formatting & Broadcast Compliance
+
+`subgen` includes a zero-dependency Python post-processor (`json_to_srt.py`) that upgrades raw Whisper transcriptions into broadcast-compliant SRT files. It automatically enforces rules from the **Netflix Timed Text Style Guide** and **BBC Subtitle Guidelines**:
+
+- **Characters Per Line (CPL) Limits:** Automatically wraps text at a maximum of 42 characters (configurable via `--cpl <number>`).
+- **Reading Speed (CPS) Limits:** Enforces a maximum reading speed of 20 characters per second (`MAX_CPS`). Cues that are too fast are dynamically extended so viewers have time to read them.
+- **Syntactic Line Balancing (Inverted Pyramid):** Replaces Whisper's arbitrary character-count breaks with intelligent NLP parsing. It splits lines symmetrically on natural grammatical boundaries (punctuation, conjunctions, prepositions) while prioritizing the BBC "inverted pyramid" aesthetic (bottom-heavy lines).
+- **Abbreviation & SDH Bracket Awareness:** Protects against mid-sentence splitting on abbreviations (`Dr.`, `U.S.`) and prevents splitting inside Sound Effect / SDH brackets (`[dog barking]`).
+- **Micro-Gap Snapping:** Eliminates subtitle "flicker" by dynamically snapping micro-gaps (<120ms) between adjacent cues while preventing overlapping timestamps.
+- **CJK Support:** Safely handles non-spaced languages (Chinese, Japanese, Korean) where Whisper token boundaries differ from Latin scripts.
+
+This phase runs automatically as **Phase 2.5**. If you wish to disable it and retain raw Whisper output, pass the `--no-postprocess` flag.
 
 [↑ Back to top](#subgen)
 
