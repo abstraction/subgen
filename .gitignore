@@ -65,3 +65,8 @@ venv/
 .venv/
 node_modules/
 npm-debug.log*
+
+# ==========================================
+# 6. IDEs and Tooling
+# ==========================================
+.specstory/

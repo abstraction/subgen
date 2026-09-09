@@ -1,0 +1,65 @@
+1
+00:00:08,820 --> 00:00:10,829
+You want these people.
+
+2
+00:00:10,829 --> 00:00:15,360
+They order your products, sign up for
+your services, enroll in your classes,
+
+3
+00:00:15,360 --> 00:00:18,120
+read your opinions,
+and watch your videos.
+
+4
+00:00:18,540 --> 00:00:21,019
+You'll never see them,
+but they know you.
+
+5
+00:00:21,480 --> 00:00:22,680
+Through your website.
+
+6
+00:00:23,880 --> 00:00:23,980
+Or
+
+7
+00:00:23,880 --> 00:00:25,560
+maybe not.
+
+8
+00:00:26,080 --> 00:00:29,180
+Your website's visitors aren't
+a faceless mass of identical mouse
+
+9
+00:00:29,180 --> 00:00:34,140
+clickers, but a vibrant community of
+individuals with varying tastes, styles,
+
+10
+00:00:34,140 --> 00:00:37,940
+and abilities.
+This includes people with disabilities.
+
+11
+00:00:38,699 --> 00:00:42,690
+It's important for web designers and
+developers to realize that what they see
+
+12
+00:00:42,690 --> 00:00:47,950
+currently on their computer, at their
+resolution, with their browser and their
+
+13
+00:00:48,090 --> 00:00:51,080
+operating system, is not going
+to be necessarily the same thing that
+
+14
+00:00:51,080 --> 00:00:52,280
+everybody else sees.
+
