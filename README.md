@@ -85,7 +85,7 @@ cd ..
 
 > **Verify:** `whisper.cpp/build/bin/whisper-cli` should now exist.
 
-> **Build crashing on Linux/WSL?** NVCC generates large memory structures for CUDA templates (`fattn`, `ggml-cuda`), peaking at 3-4 GB per compiler thread. On RAM-limited machines this kills the build. Two options:
+> **If the build crashes on Linux/WSL:** NVCC generates large memory structures for CUDA templates (`fattn`, `ggml-cuda`), peaking at 3-4 GB per compiler thread. On RAM-limited machines this kills the build. Two options:
 >
 > Use a memory-aware job count instead of `-j$(nproc)`:
 >
@@ -118,7 +118,7 @@ cd ../..
 
 Downloads `ggml-large-v3.bin` into `whisper.cpp/models/`.
 
-> **Why large-v3?** Whisper large-v3 is OpenAI's most accurate speech recognition model. It requires a moderate amount of VRAM (usually around 4-5 GB) during inference, fitting comfortably on 6 GB cards like the RTX 3050. For smaller GPUs, you can use quantized variants like `q5_0`.
+> Whisper large-v3 is OpenAI's most accurate speech recognition model. It requires a moderate amount of VRAM (usually around 4-5 GB) during inference, fitting comfortably on 6 GB cards like the RTX 3050. For smaller GPUs, you can use quantized variants like `q5_0`.
 
 Verify the model and GPU are working with the bundled JFK sample:
 
@@ -131,7 +131,7 @@ You should see a transcript. `ggml_cuda_init` in the output confirms the GPU was
 
 ### 5. Download the VAD model _(optional but recommended)_
 
-**[Silero VAD](https://github.com/snakers4/silero-vad)** is a small neural Voice Activity Detection model (~864 KB). With it enabled, whisper.cpp uses Silero VAD to detect speech regions before transcription, reducing unnecessary processing on long silent sections. This makes a real difference on videos with long pauses, intros, or music.
+**[Silero VAD](https://github.com/snakers4/silero-vad)** is a small neural Voice Activity Detection model (~864 KB). With it enabled, whisper.cpp uses Silero VAD to detect speech regions before transcription, reducing unnecessary processing on long silent sections. This saves time on videos with long pauses, intros, or music.
 
 The model is distributed in GGML format by [ggml-org](https://huggingface.co/ggml-org/whisper-vad) and comes with whisper.cpp's own download helper.
 
@@ -311,7 +311,7 @@ See the **[Model Reference](#model-reference)** section below for a full breakdo
 | `small.en`  | `small`                 |
 | `medium.en` | `medium`                |
 
-`large-v3` is **multilingual only** — there's no official `large-v3.en`. It handles English fine; just pass `-l en` to lock the language and stop it from guessing wrong.
+`large-v3` is **multilingual only** — there's no official `large-v3.en`. It handles English fine; pass `-l en` to lock the language and stop it from guessing wrong.
 
 ### Quantization tiers
 
@@ -324,7 +324,7 @@ Quantization swaps 16-bit float weights for smaller integers, cutting file size 
 | `FP16` (none) | 16   | baseline      | Full precision, highest VRAM              |
 | `Q8_0`        | 8    | Negligible    | Essentially identical to FP16 in practice |
 | `Q5_0`        | 5    | Very small    | Best balance, recommended for most GPUs   |
-| `Q4`          | 4    | Noticeable    | Only worth it when VRAM is very tight     |
+| `Q4`          | 4    | Noticeable    | Only worth it when VRAM is tight          |
 
 The real-world gap between Q8 and Q5 is small. Most files produce identical transcripts. You're more likely to notice a difference with heavy accents, noisy audio, overlapping speakers, or dense technical vocabulary.
 
@@ -340,7 +340,7 @@ VRAM usage varies significantly depending on context size and runtime settings. 
 | `medium.en`       | Moderate  | Good          | English   | Unquantized medium baseline         |
 | `medium.en-q5_0`  | Low       | Good          | English   | Speed priority or low-VRAM fallback |
 
-> `large-v3` (FP16) fits comfortably on most 6 GB cards like the RTX 3050. If you are extremely tight on VRAM, you can use a quantized model like `q5_0`.
+> `large-v3` (FP16) fits comfortably on most 6 GB cards like the RTX 3050. If you are tight on VRAM, you can use a quantized model like `q5_0`.
 
 ---
 
@@ -410,14 +410,14 @@ cd whisper.cpp && cmake -B build -DGGML_CUDA=1 && cmake --build build --config R
 
 ## Subtitle Formatting & Broadcast Compliance
 
-`subgen` includes a zero-dependency Python post-processor (`json_to_srt.py`) that upgrades raw Whisper transcriptions into broadcast-compliant SRT files. It automatically enforces rules from the **Netflix Timed Text Style Guide** and **BBC Subtitle Guidelines**:
+`subgen` includes a zero-dependency Python post-processor (`json_to_srt.py`) that formats raw Whisper transcriptions into broadcast-compliant SRT files. It automatically enforces rules from the **Netflix Timed Text Style Guide** and **BBC Subtitle Guidelines**:
 
 - **Characters Per Line (CPL) Limits:** Automatically wraps text at a maximum of 40 characters (configurable via `--cpl <number>`).
-- **Reading Speed (CPS) Limits:** Enforces a maximum reading speed of 20 characters per second (`MAX_CPS`). Cues that are too fast are dynamically extended so viewers have time to read them.
-- **Syntactic Line Balancing (Inverted Pyramid):** Replaces Whisper's arbitrary character-count breaks with intelligent NLP parsing. It splits lines symmetrically on natural grammatical boundaries (punctuation, conjunctions, prepositions) while prioritizing the BBC "inverted pyramid" aesthetic (bottom-heavy lines).
+- **Reading Speed (CPS) Limits:** Enforces a maximum reading speed of 20 characters per second (`MAX_CPS`). Cues that are too fast are extended so viewers have time to read them.
+- **Syntactic Line Balancing (Inverted Pyramid):** Replaces Whisper's arbitrary character-count breaks with NLP parsing. It splits lines symmetrically on natural grammatical boundaries (punctuation, conjunctions, prepositions) while prioritizing the BBC "inverted pyramid" aesthetic (bottom-heavy lines).
 - **Abbreviation & SDH Bracket Awareness:** Protects against mid-sentence splitting on abbreviations (`Dr.`, `U.S.`) and prevents splitting inside Sound Effect / SDH brackets (`[dog barking]`).
-- **Micro-Gap Snapping:** Eliminates subtitle "flicker" by dynamically snapping micro-gaps (<120ms) between adjacent cues while preventing overlapping timestamps.
-- **CJK Support:** Safely handles non-spaced languages (Chinese, Japanese, Korean) where Whisper token boundaries differ from Latin scripts.
+- **Micro-Gap Snapping:** Eliminates subtitle "flicker" by snapping micro-gaps (<120ms) between adjacent cues while preventing overlapping timestamps.
+- **CJK Support:** Handles non-spaced languages (Chinese, Japanese, Korean) where Whisper token boundaries differ from Latin scripts.
 
 This phase runs automatically as **Phase 2.5**. If you wish to disable it and retain raw Whisper output, pass the `--no-postprocess` flag.
 
@@ -478,7 +478,7 @@ File 3 → Start whisper-cli → Load model → Transcribe → Exit
 
 For large batches containing many short videos, the repeated model initialization overhead can become significant.
 
-A future version could introduce a persistent transcription worker that keeps the Whisper model loaded and processes multiple files through the same inference session:
+A persistent transcription worker would keep the Whisper model loaded and process multiple files through the same inference session:
 
 ```
 Video files → FFmpeg → Persistent Whisper worker → SRT output
@@ -486,7 +486,7 @@ Video files → FFmpeg → Persistent Whisper worker → SRT output
                          └── Model loaded once and reused
 ```
 
-Possible approaches to explore:
+Approaches to evaluate:
 
 - Use the existing `whisper.cpp` server/library API to keep a long-running inference process
 - Evaluate `faster-whisper` (CTranslate2) as an alternative backend
