@@ -1,6 +1,6 @@
 # subgen
 
-Batch subtitle generator for WSL (English by default, configurable for other Whisper-supported languages). Point it at a folder of videos and it spits out `.srt` files next to each one. Under the hood it's just ffmpeg for audio extraction and **[whisper.cpp](https://github.com/ggml-org/whisper.cpp)** for transcription, running on your NVIDIA GPU via CUDA.
+Batch subtitle generator for WSL (English by default, configurable for other Whisper-supported languages). Point it at a folder of video or audio files and it spits out `.srt` files next to each one. Under the hood it's just ffmpeg for audio extraction and **[whisper.cpp](https://github.com/ggml-org/whisper.cpp)** for transcription, running on your NVIDIA GPU via CUDA.
 
 ## Project Structure
 
@@ -46,6 +46,7 @@ subgen/
 | `cmake` >= 3.14          | `sudo apt install cmake build-essential`                                                                    |
 | `ffmpeg`                 | `sudo apt install ffmpeg`                                                                                   |
 | `git`                    | For cloning and submodule init                                                                              |
+| `fd-find` (optional)     | `sudo apt install fd-find` (Massively speeds up file discovery on large drives)                             |
 
 ## Setup
 
@@ -192,11 +193,11 @@ nvcc --version
 
 The script will:
 
-1. Discover all `.mp4 .mkv .avi .webm .ts .mov` files in the given directory (recursive).
-2. Skip any video that already has a matching `.srt` beside it (resume-safe), unless `--force` is passed.
+1. Discover all supported media files (video & audio) in the given directory (recursive).
+2. Skip any media file that already has a matching `.srt` beside it (resume-safe), unless `--force` is passed.
 3. Extract a mono 16 kHz WAV to `/tmp/` via ffmpeg.
 4. Transcribe with `whisper-cli` on your NVIDIA GPU.
-5. Write the `.srt` next to the original video and clean up temp files.
+5. Write the `.srt` next to the original file and clean up temp files.
 6. Log any failures to `transcription_errors.log` inside the input directory.
 
 ### Example
@@ -401,18 +402,20 @@ This phase runs automatically as **Phase 2.5**. If you wish to disable it and re
 
 [↑ Back to top](#subgen)
 
-## Supported Video Formats
+## Supported Media Formats
 
-`.mp4` · `.mkv` · `.avi` · `.webm` · `.ts` · `.mov`
+**Video:** `.mp4` · `.mkv` · `.avi` · `.webm` · `.ts` · `.mov` · `.m4v` · `.wmv` · `.m2ts` · `.mts` · `.mxf` · `.vob` · `.flv`
 
-Detection is case-insensitive (`.MP4`, `.Mkv`, etc. all work).
+**Audio:** `.mp3` · `.m4a` · `.aac` · `.wav` · `.flac` · `.ogg` · `.opus` · `.wma`
+
+Detection is case-insensitive (`.MP4`, `.mp3`, etc. all work).
 
 [↑ Back to top](#subgen)
 
 ## Robustness Features
 
-- **Recursive batch discovery** — processes nested folders automatically.
-- **Resume support** — already-transcribed videos are skipped automatically.
+- **Recursive batch discovery** — uses `fd` (if installed) to scan huge directories instantly, falling back to `find` if missing.
+- **Resume support** — skips files that already have an SRT.
 - **VAD auto-retry** — if whisper-cli crashes with VAD enabled (a known malloc issue), the script retries without VAD before giving up on that file.
 - **CUDA silent failure detection** — inspects the whisper-cli log for `ggml_cuda_init` to catch cases where the GPU was silently skipped.
 - **CUDA version mismatch detection** — detects `failed to initialize CUDA` and exits with a clear message to update host NVIDIA drivers.
@@ -433,7 +436,8 @@ Detection is case-insensitive (`.MP4`, `.Mkv`, etc. all work).
 | `No CMAKE_CUDA_COMPILER could be found`       | Install the CUDA toolkit and add `nvcc` to `PATH`. See [CUDA Setup](#cuda-setup-wsl).                                 |
 | Build crashes / WSL resets during compilation | NVCC OOM. Use the memory-aware build command or add swap. See [Build step 2](#2-build-whisper-cli-with-cuda-support). |
 | Wrong GPU used (iGPU instead of dGPU)         | Set `NVIDIA_GPU_INDEX=1` (or the correct index from `nvidia-smi`).                                                    |
-| Zero-byte WAV file                            | The video has no audio track; that file is skipped automatically.                                                     |
+| Zero-byte WAV file                            | The media file has no audio track; it is skipped automatically.                                                       |
+| Scanning directory takes forever              | Install `fd-find` (`sudo apt install fd-find`). WSL reads Windows drives slowly, and `fd` handles this much better than `find`. |
 
 [↑ Back to top](#subgen)
 
@@ -443,12 +447,12 @@ Detection is case-insensitive (`.MP4`, `.Mkv`, etc. all work).
 
 The current pipeline uses `whisper.cpp` with CUDA acceleration and the `large-v3` model. It is already optimized for local GPU inference and includes VAD support, progress reporting, error handling, and automatic resume handling.
 
-One area for improvement is the current process lifecycle. At the moment, each video starts a new `whisper-cli` process, which means the model has to be loaded into GPU memory again for every file:
+One area for improvement is the current process lifecycle. At the moment, each file starts a new `whisper-cli` process, which means the model has to be loaded into GPU memory again for every file:
 
 ```
-Video 1 → Start whisper-cli → Load model → Transcribe → Exit
-Video 2 → Start whisper-cli → Load model → Transcribe → Exit
-Video 3 → Start whisper-cli → Load model → Transcribe → Exit
+File 1 → Start whisper-cli → Load model → Transcribe → Exit
+File 2 → Start whisper-cli → Load model → Transcribe → Exit
+File 3 → Start whisper-cli → Load model → Transcribe → Exit
 ```
 
 For large batches containing many short videos, the repeated model initialization overhead can become significant.

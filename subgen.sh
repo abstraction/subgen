@@ -106,7 +106,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [ -z "$INPUT_DIR" ]; then
-    echo -e "${RED}Usage: $0 [options] \"/path/to/windows/video/folder\"${RESET}" >&2
+    echo -e "${RED}Usage: $0 [options] \"/path/to/windows/media/folder\"${RESET}" >&2
     echo -e "${YELLOW}Options:${RESET}" >&2
     echo -e "${YELLOW}  -l, --lang <lang>   Set specific language (e.g., 'es', 'fr')${RESET}" >&2
     echo -e "${YELLOW}  -a, --auto          Enable multilingual auto-detection (sets language to 'auto')${RESET}" >&2
@@ -127,6 +127,9 @@ FILES_SKIPPED=0
 # GPU verification: set after first file confirms CUDA is active
 GPU_VERIFIED=false
 VRAM_BASELINE_MB=0
+
+WHISPER_PID=""
+RETRY_PID=""
 
 # ---------------------------------------------------------------------------
 # HELPERS: UI primitives
@@ -466,51 +469,76 @@ info "Error log:"         "$ERROR_LOG_FILE"
 # ---------------------------------------------------------------------------
 # FILE DISCOVERY
 # ---------------------------------------------------------------------------
-printf "   ${CYAN}%-22s${RESET} %s\n" "Scanning directory:" "Finding video files (this may take a minute on large drives)..."
-mapfile -t VIDEO_FILES < <(
-    find "$INPUT_DIR" -type f \( \
-        -iname "*.mp4" -o \
-        -iname "*.mkv" -o \
-        -iname "*.avi" -o \
-        -iname "*.webm" -o \
-        -iname "*.ts"  -o \
-        -iname "*.mov" \
-    \)
-)
+printf "   ${CYAN}%-22s${RESET} %s\n" "Scanning directory:" "Finding media files (this may take a minute on large drives)..."
 
-if [ ${#VIDEO_FILES[@]} -eq 0 ]; then
-    err "No video files found in: $INPUT_DIR"
-    hint "Supported extensions (case-insensitive): mp4, mkv, avi, webm, ts, mov"
+# Detect fd or fdfind
+if command -v fdfind &> /dev/null; then
+    FD_CMD="fdfind"
+elif command -v fd &> /dev/null; then
+    FD_CMD="fd"
+else
+    FD_CMD=""
+fi
+
+if [ -n "$FD_CMD" ]; then
+    # FAST DISCOVERY VIA FD
+    mapfile -t MEDIA_FILES < <(
+        "$FD_CMD" -t f \
+            -e mp4 -e mkv -e avi -e webm -e ts -e mov -e m4v -e wmv -e m2ts -e mts -e mxf -e vob -e flv \
+            -e mp3 -e m4a -e aac -e wav -e flac -e ogg -e opus -e wma \
+            . "$INPUT_DIR"
+    )
+    hint "Scanner engine: $FD_CMD (accelerated)"
+else
+    # FALLBACK TO STANDARD FIND
+    mapfile -t MEDIA_FILES < <(
+        find "$INPUT_DIR" -type f \( \
+            -iname "*.mp4" -o -iname "*.mkv" -o -iname "*.avi" -o \
+            -iname "*.webm" -o -iname "*.ts"  -o -iname "*.mov" -o \
+            -iname "*.m4v" -o -iname "*.wmv" -o -iname "*.m2ts" -o \
+            -iname "*.mts" -o -iname "*.mxf" -o -iname "*.vob" -o \
+            -iname "*.flv" -o -iname "*.mp3" -o -iname "*.m4a" -o \
+            -iname "*.aac" -o -iname "*.wav" -o -iname "*.flac" -o \
+            -iname "*.ogg" -o -iname "*.opus" -o -iname "*.wma" \
+        \)
+    )
+    hint "Scanner engine: find (install fd-find for faster scanning)"
+fi
+
+if [ ${#MEDIA_FILES[@]} -eq 0 ]; then
+    err "No media files found in: $INPUT_DIR"
+    hint "Supported video: mp4, mkv, avi, webm, ts, mov, m4v, wmv, m2ts, mts, mxf, vob, flv"
+    hint "Supported audio: mp3, m4a, aac, wav, flac, ogg, opus, wma"
     exit 1
 fi
 
-info "Files found:"       "${#VIDEO_FILES[@]}"
+info "Files found:"       "${#MEDIA_FILES[@]}"
 
 # ---------------------------------------------------------------------------
 # MAIN BATCH PROCESSING LOOP
 # ---------------------------------------------------------------------------
-TOTAL_FILES=${#VIDEO_FILES[@]}
+TOTAL_FILES=${#MEDIA_FILES[@]}
 FILE_COUNT=0
 
-for VIDEO_PATH in "${VIDEO_FILES[@]}"; do
+for MEDIA_PATH in "${MEDIA_FILES[@]}"; do
     FILE_COUNT=$((FILE_COUNT + 1))
 
-    VIDEO_FILENAME=$(basename "$VIDEO_PATH")
-    VIDEO_BASENAME="${VIDEO_FILENAME%.*}"
-    VIDEO_DIR=$(dirname "$VIDEO_PATH")
+    MEDIA_FILENAME=$(basename "$MEDIA_PATH")
+    MEDIA_BASENAME="${MEDIA_FILENAME%.*}"
+    MEDIA_DIR=$(dirname "$MEDIA_PATH")
 
-    TEMP_WAV_PATH="$TEMP_DIR/$VIDEO_BASENAME.wav"
-    FINAL_SRT_PATH="$VIDEO_DIR/$VIDEO_BASENAME.srt"
-    TEMP_SRT_BASE_PATH="$TEMP_DIR/$VIDEO_BASENAME"
+    TEMP_WAV_PATH="$TEMP_DIR/$MEDIA_BASENAME.wav"
+    FINAL_SRT_PATH="$MEDIA_DIR/$MEDIA_BASENAME.srt"
+    TEMP_SRT_BASE_PATH="$TEMP_DIR/$MEDIA_BASENAME"
     EXPECTED_SRT_PATH="$TEMP_SRT_BASE_PATH.srt"
 
-    FFMPEG_LOG="$TEMP_DIR/$VIDEO_BASENAME.ffmpeg.log"
-    WHISPER_LOG="$TEMP_DIR/$VIDEO_BASENAME.whisper.log"
+    FFMPEG_LOG="$TEMP_DIR/$MEDIA_BASENAME.ffmpeg.log"
+    WHISPER_LOG="$TEMP_DIR/$MEDIA_BASENAME.whisper.log"
 
     FILE_START_TIME=$(date +%s)
 
     # Determine a clean display path (relative to INPUT_DIR)
-    DISPLAY_PATH="${VIDEO_PATH#${INPUT_DIR%/}/}"
+    DISPLAY_PATH="${MEDIA_PATH#${INPUT_DIR%/}/}"
 
     echo ""
     echo -e "${BOLD}[${FILE_COUNT}/${TOTAL_FILES}]${RESET} ${CYAN}${DISPLAY_PATH}${RESET}"
@@ -534,7 +562,7 @@ for VIDEO_PATH in "${VIDEO_FILES[@]}"; do
     # ------------------------------------------------------------------
     printf "   ${BLUE}Phase 1${RESET}  Extracting audio...    "
 
-    if ! ffmpeg -i "$VIDEO_PATH" -vn \
+    if ! ffmpeg -i "$MEDIA_PATH" -vn \
         -acodec pcm_s16le \
         -ar 16000 \
         -ac 1 \
@@ -551,7 +579,7 @@ for VIDEO_PATH in "${VIDEO_FILES[@]}"; do
         if [ -s "$FFMPEG_LOG" ]; then
             sed 's/^/             /' "$FFMPEG_LOG" >&2
         fi
-        log_error "$VIDEO_PATH" "FFmpeg failed (code: $exit_code)."
+        log_error "$MEDIA_PATH" "FFmpeg failed (code: $exit_code)."
         rm -f "$TEMP_WAV_PATH" "$FFMPEG_LOG"
         FILES_FAILED=$((FILES_FAILED + 1))
         continue
@@ -560,8 +588,8 @@ for VIDEO_PATH in "${VIDEO_FILES[@]}"; do
     if [ ! -s "$TEMP_WAV_PATH" ]; then
         printf "\n"
         err "FFmpeg succeeded but produced an empty WAV file."
-        hint "The video likely has no audio track."
-        log_error "$VIDEO_PATH" "FFmpeg produced a zero-byte WAV file."
+        hint "The media file likely has no audio track."
+        log_error "$MEDIA_PATH" "FFmpeg produced a zero-byte WAV file."
         rm -f "$TEMP_WAV_PATH" "$FFMPEG_LOG"
         FILES_FAILED=$((FILES_FAILED + 1))
         continue
@@ -665,7 +693,7 @@ for VIDEO_PATH in "${VIDEO_FILES[@]}"; do
 
             if [ "$RETRY_EXIT" -ne 0 ]; then
                 err "Transcription failed (VAD off retry also failed, code: $RETRY_EXIT)."
-                log_error "$VIDEO_PATH" "Whisper failed on both VAD and non-VAD attempts (code: $RETRY_EXIT)."
+                log_error "$MEDIA_PATH" "Whisper failed on both VAD and non-VAD attempts (code: $RETRY_EXIT)."
                 hint "Temp WAV kept for debugging: $TEMP_WAV_PATH"
                 rm -f "$WHISPER_LOG"
                 FILES_FAILED=$((FILES_FAILED + 1))
@@ -674,7 +702,7 @@ for VIDEO_PATH in "${VIDEO_FILES[@]}"; do
             hint "Retry without VAD succeeded."
         else
             err "Transcription failed (code: $WHISPER_EXIT)."
-            log_error "$VIDEO_PATH" "Whisper failed with VAD disabled (code: $WHISPER_EXIT)."
+            log_error "$MEDIA_PATH" "Whisper failed with VAD disabled (code: $WHISPER_EXIT)."
             hint "Temp WAV kept for debugging: $TEMP_WAV_PATH"
             rm -f "$WHISPER_LOG"
             FILES_FAILED=$((FILES_FAILED + 1))
@@ -694,7 +722,7 @@ for VIDEO_PATH in "${VIDEO_FILES[@]}"; do
         elif ! grep -q "ggml_cuda_init" "$WHISPER_LOG" 2>/dev/null; then
             err "CUDA silent failure — whisper fell back to CPU."
             hint "Possible VRAM overflow. Try a smaller model (e.g. medium.en or medium.en-q5_0)."
-            log_error "$VIDEO_PATH" "CUDA silent failure — whisper fell back to CPU."
+            log_error "$MEDIA_PATH" "CUDA silent failure — whisper fell back to CPU."
             hint "Temp WAV kept for debugging: $TEMP_WAV_PATH"
             rm -f "$WHISPER_LOG"
             FILES_FAILED=$((FILES_FAILED + 1))
@@ -716,7 +744,7 @@ for VIDEO_PATH in "${VIDEO_FILES[@]}"; do
         err "Whisper exited cleanly but produced no SRT file (silent failure)."
         hint "Expected: $EXPECTED_SRT_PATH"
         hint "Temp WAV kept for debugging: $TEMP_WAV_PATH"
-        log_error "$VIDEO_PATH" "Whisper ran but produced no SRT (silent failure)."
+        log_error "$MEDIA_PATH" "Whisper ran but produced no SRT (silent failure)."
         FILES_FAILED=$((FILES_FAILED + 1))
         continue
     fi
@@ -727,7 +755,7 @@ for VIDEO_PATH in "${VIDEO_FILES[@]}"; do
     if [ "$ENABLE_POSTPROCESS" = true ]; then
         if [ -f "$TEMP_JSON_PATH" ]; then
             printf "   ${BLUE}Phase 2.5${RESET} Optimizing flow...     "
-            POSTPROCESS_LOG="$TEMP_DIR/$VIDEO_BASENAME.postprocess.log"
+            POSTPROCESS_LOG="$TEMP_DIR/$MEDIA_BASENAME.postprocess.log"
             PROCESSED_SRT_PATH="$TEMP_SRT_BASE_PATH.processed.srt"
 
             if "$PYTHON_BIN" "$POSTPROCESS_SCRIPT" "$TEMP_JSON_PATH" \
@@ -771,7 +799,7 @@ for VIDEO_PATH in "${VIDEO_FILES[@]}"; do
         printf "\n"
         err "Failed to copy SRT to destination."
         hint "Dest: $FINAL_SRT_PATH"
-        log_error "$VIDEO_PATH" "Failed to copy SRT from temp to destination."
+        log_error "$MEDIA_PATH" "Failed to copy SRT from temp to destination."
         FILES_FAILED=$((FILES_FAILED + 1))
     fi
 
