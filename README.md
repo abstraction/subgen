@@ -1,6 +1,6 @@
 # subgen
 
-Batch subtitle generator for WSL (English by default, configurable for other Whisper-supported languages). Point it at a folder of video or audio files and it spits out `.srt` files next to each one. Under the hood it's just ffmpeg for audio extraction and **[whisper.cpp](https://github.com/ggml-org/whisper.cpp)** for transcription, running on your NVIDIA GPU via CUDA.
+Batch subtitle generator for Linux, macOS, and WSL (English by default, configurable for other Whisper-supported languages). Point it at a folder of video or audio files and it spits out `.srt` files next to each one. Under the hood it uses ffmpeg for audio extraction and **[whisper.cpp](https://github.com/ggml-org/whisper.cpp)** for transcription, running on your GPU (via CUDA on Linux/WSL or Metal on macOS).
 
 ## Project Structure
 
@@ -24,7 +24,7 @@ subgen/
 - [Project Structure](#project-structure)
 - [Prerequisites](#prerequisites)
 - [Setup](#setup)
-- [CUDA Setup (WSL)](#cuda-setup-wsl)
+- [Hardware Acceleration (CUDA & Metal)](#hardware-acceleration-cuda--metal)
 - [Usage](#usage)
 - [Add to PATH](#add-to-path)
 - [Configuration](#configuration)
@@ -40,13 +40,13 @@ subgen/
 
 | Requirement              | Notes                                                                                                       |
 | ------------------------ | ----------------------------------------------------------------------------------------------------------- |
-| WSL 2 (Ubuntu)           | Windows Subsystem for Linux                                                                                 |
-| NVIDIA GPU + drivers     | Install the NVIDIA Graphics Driver on the Windows host. It exposes the GPU to WSL automatically via GPU-PV. |
-| CUDA Toolkit (WSL build) | Install inside WSL from NVIDIA's CUDA repo (see [CUDA Setup](#cuda-setup-wsl))                              |
-| `cmake` >= 3.14          | `sudo apt install cmake build-essential`                                                                    |
-| `ffmpeg`                 | `sudo apt install ffmpeg`                                                                                   |
+| OS                       | Linux, macOS, or Windows Subsystem for Linux (WSL 2)                                                        |
+| GPU (Optional)           | NVIDIA GPU (requires CUDA) or Apple Silicon (uses Metal)                                                    |
+| CUDA Toolkit             | Required for NVIDIA GPUs (see [Hardware Acceleration](#hardware-acceleration-cuda--metal) for Linux/WSL setup)|
+| `cmake` >= 3.14          | `sudo apt install cmake build-essential` (Ubuntu/WSL) or `brew install cmake` (macOS)                       |
+| `ffmpeg`                 | `sudo apt install ffmpeg` (Ubuntu/WSL) or `brew install ffmpeg` (macOS)                                     |
 | `git`                    | For cloning and submodule init                                                                              |
-| `fd-find` (optional)     | `sudo apt install fd-find` (Massively speeds up file discovery on large drives)                             |
+| `fd-find` (optional)     | `sudo apt install fd-find` or `brew install fd` (Massively speeds up file discovery on large drives)        |
 
 ## Setup
 
@@ -63,7 +63,9 @@ If you already cloned without `--recurse-submodules`:
 git submodule update --init --recursive
 ```
 
-### 2. Build `whisper-cli` with CUDA support
+### 2. Build `whisper-cli`
+
+For **NVIDIA GPUs (Linux/WSL)**:
 
 ```bash
 cd whisper.cpp
@@ -72,9 +74,18 @@ cmake --build build --config Release -j$(nproc)
 cd ..
 ```
 
+For **macOS (Apple Silicon)**, Metal is enabled by default:
+
+```bash
+cd whisper.cpp
+cmake -B build
+cmake --build build --config Release -j$(sysctl -n hw.ncpu)
+cd ..
+```
+
 > **Verify:** `whisper.cpp/build/bin/whisper-cli` should now exist.
 
-> **Build crashing or WSL resetting?** NVCC generates large memory structures for CUDA templates (`fattn`, `ggml-cuda`), peaking at 3-4 GB per compiler thread. On RAM-limited machines this kills the build. Two options:
+> **Build crashing on Linux/WSL?** NVCC generates large memory structures for CUDA templates (`fattn`, `ggml-cuda`), peaking at 3-4 GB per compiler thread. On RAM-limited machines this kills the build. Two options:
 >
 > Use a memory-aware job count instead of `-j$(nproc)`:
 >
@@ -135,11 +146,19 @@ Downloads `ggml-silero-v6.2.0.bin` (~864 KB) into `whisper.cpp/models/`.
 
 [↑ Back to top](#subgen)
 
-## CUDA Setup (WSL)
+## Hardware Acceleration (CUDA & Metal)
 
-### Driver architecture
+### macOS (Metal)
 
-NVIDIA GPU acceleration in WSL2 works through GPU Paravirtualization (GPU-PV):
+On Apple Silicon Macs, `whisper.cpp` automatically uses the Metal framework for GPU acceleration. No extra drivers or toolkits are needed.
+
+### NVIDIA CUDA (Linux)
+
+On native Linux, install the NVIDIA driver and CUDA toolkit provided by your distribution or from NVIDIA's official repository.
+
+### NVIDIA CUDA (WSL2)
+
+NVIDIA GPU acceleration in Windows Subsystem for Linux works through GPU Paravirtualization (GPU-PV):
 
 - **Windows host:** install the NVIDIA Graphics Driver from the [official vendor portal](https://www.nvidia.com/drivers). The Windows kernel-mode driver surfaces the GPU to WSL automatically.
 - **WSL2:** don't install a Linux graphics driver (`.run` or `.deb`) inside the WSL instance. It corrupts the paravirtualization layer and breaks the passthrough.
@@ -435,11 +454,11 @@ Detection is case-insensitive (`.MP4`, `.mp3`, etc. all work).
 | `VAD model not found`                         | Run `bash whisper.cpp/models/download-vad-model.sh silero-v6.2.0`, or set `USE_VAD=false` in `subgen.sh`.             |
 | CUDA silent failure (fell back to CPU)        | Not enough VRAM. Try `medium.en-q5_0` (~1.0 GB VRAM).                                                                 |
 | `failed to initialize CUDA`                   | Update NVIDIA drivers on the **Windows** host, then reboot.                                                           |
-| `No CMAKE_CUDA_COMPILER could be found`       | Install the CUDA toolkit and add `nvcc` to `PATH`. See [CUDA Setup](#cuda-setup-wsl).                                 |
-| Build crashes / WSL resets during compilation | NVCC OOM. Use the memory-aware build command or add swap. See [Build step 2](#2-build-whisper-cli-with-cuda-support). |
+| `No CMAKE_CUDA_COMPILER could be found`       | Install the CUDA toolkit and add `nvcc` to `PATH`. See [Hardware Acceleration](#hardware-acceleration-cuda--metal).   |
+| Build crashes or system resets during compilation | NVCC OOM. Use the memory-aware build command or add swap. See [Build step 2](#2-build-whisper-cli).               |
 | Wrong GPU used (iGPU instead of dGPU)         | Set `NVIDIA_GPU_INDEX=1` (or the correct index from `nvidia-smi`).                                                    |
 | Zero-byte WAV file                            | The media file has no audio track; it is skipped automatically.                                                       |
-| Scanning directory takes forever              | Install `fd-find` (`sudo apt install fd-find`). WSL reads Windows drives slowly, and `fd` handles this much better than `find`. |
+| Scanning directory takes forever              | Install `fd-find` (`sudo apt install fd-find` or `brew install fd`). Reading network/mounted drives is slow, and `fd` handles this much better than `find`. |
 
 [↑ Back to top](#subgen)
 

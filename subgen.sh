@@ -34,7 +34,11 @@ WHISPER_MODEL="$WHISPER_SUBMODULE_DIR/models/ggml-$WHISPER_MODEL_NAME.bin"
 # ---------------------------------------------------------------------------
 # GPU CONFIGURATION
 # ---------------------------------------------------------------------------
-USE_CUDA=true
+USE_GPU=true
+IS_MACOS=false
+if [ "$(uname -s)" = "Darwin" ]; then
+    IS_MACOS=true
+fi
 NVIDIA_GPU_INDEX=0
 GPU_FEED_THREADS=8
 
@@ -234,7 +238,7 @@ function show_progress_bar() {
 
         # Poll VRAM every ~1.5s (every 5 iterations of 0.3s sleep)
         vram_poll_counter=$(( vram_poll_counter + 1 ))
-        if [ "$USE_CUDA" = true ] && command -v nvidia-smi &>/dev/null && [ $(( vram_poll_counter % 5 )) -eq 0 ]; then
+        if [ "$USE_GPU" = true ] && command -v nvidia-smi &>/dev/null && [ $(( vram_poll_counter % 5 )) -eq 0 ]; then
             local v
             v=$(nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits --id=$NVIDIA_GPU_INDEX 2>/dev/null | xargs || true)
             if [[ -n "$v" ]]; then
@@ -250,7 +254,7 @@ function show_progress_bar() {
         local draw="${pct}|${vram_used}"
 
         if [ "$draw" != "$last_draw" ]; then
-            if [ "$USE_CUDA" = true ]; then
+            if [ "$USE_GPU" = true ]; then
                 printf "\r   [${GREEN}%s${DIM}%s${RESET}] ${BOLD}%3d%%${RESET}  ${MAGENTA}VRAM: %s/${GPU_VRAM} MiB${RESET}   " \
                     "$bar_filled" "$bar_empty" "$pct" "$vram_used"
             else
@@ -269,7 +273,7 @@ function show_progress_bar() {
     if [ "$final_exit" -eq 0 ]; then
         local bar
         bar=$(printf '█%.0s' $(seq 1 $bar_width))
-        if [ "$USE_CUDA" = true ]; then
+        if [ "$USE_GPU" = true ]; then
             printf "\r   [${GREEN}%s${RESET}] ${BOLD}%3d%%${RESET}  ${MAGENTA}VRAM: %s/${GPU_VRAM} MiB${RESET}   \n" \
                 "$bar" "100" "$vram_used"
         else
@@ -342,7 +346,7 @@ function gpu_diagnostics() {
     fi
 
     # 5. Live VRAM delta
-    if [ "$USE_CUDA" = true ] && command -v nvidia-smi &>/dev/null; then
+    if [ "$USE_GPU" = true ] && command -v nvidia-smi &>/dev/null; then
         local current_vram
         current_vram=$(nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits --id=$NVIDIA_GPU_INDEX 2>/dev/null | xargs || true)
         if [[ -n "$current_vram" ]] && [ "$VRAM_BASELINE_MB" -gt 0 ]; then
@@ -409,9 +413,13 @@ fi
 # GPU VALIDATION
 # ---------------------------------------------------------------------------
 GPU_NAME=""
-if [ "$USE_CUDA" = true ]; then
+if [ "$USE_GPU" = true ]; then
     section "GPU VALIDATION"
-    if command -v nvidia-smi &> /dev/null; then
+    if [ "$IS_MACOS" = true ]; then
+        ok "macOS detected"
+        info "Acceleration:" "Apple Silicon (Metal)"
+        GPU_VERIFIED=true
+    elif command -v nvidia-smi &> /dev/null; then
         set +e
         GPU_NAME=$(nvidia-smi --query-gpu=name,memory.total,driver_version \
                    --format=csv,noheader,nounits --id=$NVIDIA_GPU_INDEX 2>/dev/null)
@@ -471,8 +479,12 @@ fi
 info "Model:"             "$WHISPER_MODEL_NAME"
 info "Language:"          "$LANGUAGE"
 info "Task:"              "$TASK"
-if [ "$USE_CUDA" = true ]; then
-    info "Acceleration:"  "CUDA (GPU ${NVIDIA_GPU_INDEX}) — ${GPU_FEED_THREADS} feeder threads"
+if [ "$USE_GPU" = true ]; then
+    if [ "$IS_MACOS" = true ]; then
+        info "Acceleration:"  "Metal (Apple Silicon) — ${NUM_THREADS} threads"
+    else
+        info "Acceleration:"  "CUDA (GPU ${NVIDIA_GPU_INDEX}) — ${GPU_FEED_THREADS} feeder threads"
+    fi
 else
     info "Acceleration:"  "CPU only — ${NUM_THREADS} threads"
 fi
@@ -619,9 +631,13 @@ for MEDIA_PATH in "${MEDIA_FILES[@]}"; do
         -l "$LANGUAGE"
     )
 
-    if [ "$USE_CUDA" = true ]; then
-        export CUDA_VISIBLE_DEVICES=$NVIDIA_GPU_INDEX
-        WHISPER_CMD_ARGS+=( -t "$GPU_FEED_THREADS" )
+    if [ "$USE_GPU" = true ]; then
+        if [ "$IS_MACOS" = false ]; then
+            export CUDA_VISIBLE_DEVICES=$NVIDIA_GPU_INDEX
+            WHISPER_CMD_ARGS+=( -t "$GPU_FEED_THREADS" )
+        else
+            WHISPER_CMD_ARGS+=( -t "$NUM_THREADS" )
+        fi
     else
         WHISPER_CMD_ARGS+=( -t "$NUM_THREADS" -ng )
     fi
@@ -668,9 +684,13 @@ for MEDIA_PATH in "${MEDIA_FILES[@]}"; do
                 -f "$TEMP_WAV_PATH"
                 -l "$LANGUAGE"
             )
-            if [ "$USE_CUDA" = true ]; then
-                export CUDA_VISIBLE_DEVICES=$NVIDIA_GPU_INDEX
-                WHISPER_CMD_ARGS_RETRY+=( -t "$GPU_FEED_THREADS" )
+            if [ "$USE_GPU" = true ]; then
+                if [ "$IS_MACOS" = false ]; then
+                    export CUDA_VISIBLE_DEVICES=$NVIDIA_GPU_INDEX
+                    WHISPER_CMD_ARGS_RETRY+=( -t "$GPU_FEED_THREADS" )
+                else
+                    WHISPER_CMD_ARGS_RETRY+=( -t "$NUM_THREADS" )
+                fi
             else
                 WHISPER_CMD_ARGS_RETRY+=( -t "$NUM_THREADS" -ng )
             fi
@@ -715,26 +735,37 @@ for MEDIA_PATH in "${MEDIA_FILES[@]}"; do
     fi
 
     # ------------------------------------------------------------------
-    # CUDA VALIDATION (from log — not shown to user unless there's a problem)
+    # GPU LOG VALIDATION
     # ------------------------------------------------------------------
-    if [ "$USE_CUDA" = true ]; then
-        if grep -q "failed to initialize CUDA" "$WHISPER_LOG" 2>/dev/null; then
-            err "CUDA runtime failure — driver version insufficient."
-            hint "Update your NVIDIA drivers on Windows, reboot, and retry."
-            rm -f "$WHISPER_LOG"
-            exit 1
-        elif ! grep -q "ggml_cuda_init" "$WHISPER_LOG" 2>/dev/null; then
-            err "CUDA silent failure — whisper fell back to CPU."
-            hint "Possible VRAM overflow. Try a smaller model (e.g. medium.en or medium.en-q5_0)."
-            log_error "$MEDIA_PATH" "CUDA silent failure — whisper fell back to CPU."
-            hint "Temp WAV kept for debugging: $TEMP_WAV_PATH"
-            rm -f "$WHISPER_LOG"
-            FILES_FAILED=$((FILES_FAILED + 1))
-            continue
+    if [ "$USE_GPU" = true ]; then
+        if [ "$IS_MACOS" = false ]; then
+            if grep -q "failed to initialize CUDA" "$WHISPER_LOG" 2>/dev/null; then
+                err "CUDA runtime failure — driver version insufficient."
+                hint "Update your NVIDIA drivers, reboot, and retry."
+                rm -f "$WHISPER_LOG"
+                exit 1
+            elif ! grep -q "ggml_cuda_init" "$WHISPER_LOG" 2>/dev/null; then
+                err "CUDA silent failure — whisper fell back to CPU."
+                hint "Possible VRAM overflow. Try a smaller model (e.g. medium.en or medium.en-q5_0)."
+                log_error "$MEDIA_PATH" "CUDA silent failure — whisper fell back to CPU."
+                hint "Temp WAV kept for debugging: $TEMP_WAV_PATH"
+                rm -f "$WHISPER_LOG"
+                FILES_FAILED=$((FILES_FAILED + 1))
+                continue
+            fi
+        else
+            if ! grep -q "ggml_metal_init" "$WHISPER_LOG" 2>/dev/null; then
+                err "Metal silent failure — whisper fell back to CPU."
+                log_error "$MEDIA_PATH" "Metal silent failure — whisper fell back to CPU."
+                hint "Temp WAV kept for debugging: $TEMP_WAV_PATH"
+                rm -f "$WHISPER_LOG"
+                FILES_FAILED=$((FILES_FAILED + 1))
+                continue
+            fi
         fi
 
         # One-time GPU diagnostics after the FIRST successful transcription
-        if [ "$GPU_VERIFIED" = false ]; then
+        if [ "$GPU_VERIFIED" = false ] && [ "$IS_MACOS" = false ]; then
             gpu_diagnostics "$WHISPER_LOG" "$WAV_DURATION_INT"
             GPU_VERIFIED=true
         fi
