@@ -447,6 +447,20 @@ if [ "$USE_CUDA" = true ]; then
 fi
 
 # ---------------------------------------------------------------------------
+# SCANNER DETECTION
+# ---------------------------------------------------------------------------
+if command -v fdfind &> /dev/null; then
+    SCANNER_CMD="fdfind"
+    SCANNER_NAME="fdfind (accelerated)"
+elif command -v fd &> /dev/null; then
+    SCANNER_CMD="fd"
+    SCANNER_NAME="fd (accelerated)"
+else
+    SCANNER_CMD="find"
+    SCANNER_NAME="find (install fd-find for faster scanning)"
+fi
+
+# ---------------------------------------------------------------------------
 # PIPELINE CONFIGURATION SUMMARY (printed once)
 # ---------------------------------------------------------------------------
 section "PIPELINE CONFIGURATION"
@@ -465,30 +479,21 @@ fi
 info "VAD:"               "$([ "$USE_VAD" = true ] && echo "enabled (${VAD_MODEL_NAME})" || echo "disabled")"
 info "Temp directory:"    "$TEMP_DIR"
 info "Error log:"         "$ERROR_LOG_FILE"
+info "Scanner engine:"    "$SCANNER_NAME"
 
 # ---------------------------------------------------------------------------
 # FILE DISCOVERY
 # ---------------------------------------------------------------------------
 printf "   ${CYAN}%-22s${RESET} %s\n" "Scanning directory:" "Finding media files (this may take a minute on large drives)..."
 
-# Detect fd or fdfind
-if command -v fdfind &> /dev/null; then
-    FD_CMD="fdfind"
-elif command -v fd &> /dev/null; then
-    FD_CMD="fd"
-else
-    FD_CMD=""
-fi
-
-if [ -n "$FD_CMD" ]; then
+if [ "$SCANNER_CMD" = "fdfind" ] || [ "$SCANNER_CMD" = "fd" ]; then
     # FAST DISCOVERY VIA FD
     mapfile -t MEDIA_FILES < <(
-        "$FD_CMD" -t f \
+        "$SCANNER_CMD" -t f \
             -e mp4 -e mkv -e avi -e webm -e ts -e mov -e m4v -e wmv -e m2ts -e mts -e mxf -e vob -e flv \
             -e mp3 -e m4a -e aac -e wav -e flac -e ogg -e opus -e wma \
             . "$INPUT_DIR"
     )
-    hint "Scanner engine: $FD_CMD (accelerated)"
 else
     # FALLBACK TO STANDARD FIND
     mapfile -t MEDIA_FILES < <(
@@ -502,7 +507,6 @@ else
             -iname "*.ogg" -o -iname "*.opus" -o -iname "*.wma" \
         \)
     )
-    hint "Scanner engine: find (install fd-find for faster scanning)"
 fi
 
 if [ ${#MEDIA_FILES[@]} -eq 0 ]; then
