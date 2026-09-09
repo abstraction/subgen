@@ -1,6 +1,15 @@
-# subgen
+<div align="center">
+<pre>
+    ▌       
+▛▘▌▌▛▌▛▌█▌▛▌
+▄▌▙▌▙▌▙▌▙▖▌▌
+      ▄▌           
+</pre>
 
-Batch subtitle generator for Linux, macOS, and WSL (English by default, configurable for other Whisper-supported languages). Point it at a folder of video or audio files and it spits out `.srt` files next to each one. Under the hood it uses ffmpeg for audio extraction and **[whisper.cpp](https://github.com/ggml-org/whisper.cpp)** for transcription, running on your GPU (via CUDA on Linux/WSL or Metal on macOS).
+A GPU-accelerated batch subtitle generator for Linux, macOS, and WSL. It transcribes media folders to .srt using FFmpeg and whisper.cpp
+</div>
+
+---
 
 ## Project Structure
 
