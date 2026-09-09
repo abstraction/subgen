@@ -509,8 +509,11 @@ for VIDEO_PATH in "${VIDEO_FILES[@]}"; do
 
     FILE_START_TIME=$(date +%s)
 
+    # Determine a clean display path (relative to INPUT_DIR)
+    DISPLAY_PATH="${VIDEO_PATH#${INPUT_DIR%/}/}"
+
     echo ""
-    echo -e "${BOLD}[${FILE_COUNT}/${TOTAL_FILES}]${RESET} ${CYAN}${VIDEO_FILENAME}${RESET}"
+    echo -e "${BOLD}[${FILE_COUNT}/${TOTAL_FILES}]${RESET} ${CYAN}${DISPLAY_PATH}${RESET}"
     echo -e "   ${DIM}──────────────────────────────────────────────────${RESET}"
 
     # ------------------------------------------------------------------
