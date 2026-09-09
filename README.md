@@ -16,7 +16,7 @@ subgen/
         ├── download-ggml-model.sh
         ├── download-vad-model.sh
         ├── ggml-large-v3.bin           ← main transcription model
-        └── ggml-silero-v5.1.2.bin      ← VAD model (optional but recommended)
+        └── ggml-silero-v6.2.0.bin      ← VAD model (optional but recommended)
 ```
 
 ## Table of Content
@@ -126,10 +126,10 @@ The model is distributed in GGML format by [ggml-org](https://huggingface.co/ggm
 
 ```bash
 # From the project root:
-bash whisper.cpp/models/download-vad-model.sh silero-v5.1.2
+bash whisper.cpp/models/download-vad-model.sh silero-v6.2.0
 ```
 
-Downloads `ggml-silero-v5.1.2.bin` (~864 KB) into `whisper.cpp/models/`.
+Downloads `ggml-silero-v6.2.0.bin` (~864 KB) into `whisper.cpp/models/`.
 
 > **Tip:** VAD is on by default (`USE_VAD=true`). To skip the download and run without it, set `USE_VAD=false` in `subgen.sh`.
 
@@ -190,6 +190,8 @@ nvcc --version
 - `-a, --auto`: Enable multilingual auto-detection (sets language to `auto`)
 - `-l, --lang <lang>`: Set specific language (e.g., `es`, `fr`)
 - `-f, --force`: Force regeneration even if an `.srt` file already exists
+- `--no-postprocess`: Disable the Python post-processor and retain raw Whisper output
+- `--cpl <number>`: Override the maximum characters per line for subtitles (default: 40)
 
 The script will:
 
@@ -391,7 +393,7 @@ cd whisper.cpp && cmake -B build -DGGML_CUDA=1 && cmake --build build --config R
 
 `subgen` includes a zero-dependency Python post-processor (`json_to_srt.py`) that upgrades raw Whisper transcriptions into broadcast-compliant SRT files. It automatically enforces rules from the **Netflix Timed Text Style Guide** and **BBC Subtitle Guidelines**:
 
-- **Characters Per Line (CPL) Limits:** Automatically wraps text at a maximum of 42 characters (configurable via `--cpl <number>`).
+- **Characters Per Line (CPL) Limits:** Automatically wraps text at a maximum of 40 characters (configurable via `--cpl <number>`).
 - **Reading Speed (CPS) Limits:** Enforces a maximum reading speed of 20 characters per second (`MAX_CPS`). Cues that are too fast are dynamically extended so viewers have time to read them.
 - **Syntactic Line Balancing (Inverted Pyramid):** Replaces Whisper's arbitrary character-count breaks with intelligent NLP parsing. It splits lines symmetrically on natural grammatical boundaries (punctuation, conjunctions, prepositions) while prioritizing the BBC "inverted pyramid" aesthetic (bottom-heavy lines).
 - **Abbreviation & SDH Bracket Awareness:** Protects against mid-sentence splitting on abbreviations (`Dr.`, `U.S.`) and prevents splitting inside Sound Effect / SDH brackets (`[dog barking]`).
@@ -430,7 +432,7 @@ Detection is case-insensitive (`.MP4`, `.mp3`, etc. all work).
 | --------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
 | `whisper-cli: not found`                      | Run the cmake build step inside `whisper.cpp/`.                                                                       |
 | Model not found                               | Run `bash whisper.cpp/models/download-ggml-model.sh large-v3`.                                                        |
-| `VAD model not found`                         | Run `bash whisper.cpp/models/download-vad-model.sh silero-v5.1.2`, or set `USE_VAD=false` in `subgen.sh`.             |
+| `VAD model not found`                         | Run `bash whisper.cpp/models/download-vad-model.sh silero-v6.2.0`, or set `USE_VAD=false` in `subgen.sh`.             |
 | CUDA silent failure (fell back to CPU)        | Not enough VRAM. Try `medium.en-q5_0` (~1.0 GB VRAM).                                                                 |
 | `failed to initialize CUDA`                   | Update NVIDIA drivers on the **Windows** host, then reboot.                                                           |
 | `No CMAKE_CUDA_COMPILER could be found`       | Install the CUDA toolkit and add `nvcc` to `PATH`. See [CUDA Setup](#cuda-setup-wsl).                                 |
