@@ -95,7 +95,7 @@ while [[ $# -gt 0 ]]; do
             ;;
         *)
             if [ -z "$INPUT_DIR" ]; then
-                INPUT_DIR="$1"
+                INPUT_DIR="$(realpath "$1")"
                 shift 1
             else
                 echo -e "${RED}Too many arguments. Only one input directory is allowed.${RESET}" >&2
