@@ -631,7 +631,7 @@ for MEDIA_PATH in "${MEDIA_FILES[@]}"; do
     fi
 
     if [ "$USE_VAD" = true ]; then
-        WHISPER_CMD_ARGS+=( --vad -vm "$VAD_MODEL_PATH" )
+        WHISPER_CMD_ARGS+=( --vad -vm "$VAD_MODEL_PATH" -vp 1000 -vt 0.5 )
     fi
 
     TEMP_JSON_PATH="$TEMP_SRT_BASE_PATH.json"
@@ -739,7 +739,7 @@ for MEDIA_PATH in "${MEDIA_FILES[@]}"; do
             GPU_VERIFIED=true
         fi
     fi
-    rm -f "$WHISPER_LOG"
+
 
     # ------------------------------------------------------------------
     # SRT existence check
@@ -770,7 +770,8 @@ for MEDIA_PATH in "${MEDIA_FILES[@]}"; do
                 --max-dur "$MAX_SUBTITLE_DURATION_MS" \
                 --gap-snap "$GAP_SNAP_MS" \
                 --max-cps "$MAX_CPS" \
-                --pause-split "$PAUSE_SPLIT_MS" > "$POSTPROCESS_LOG" 2>&1; then
+                --pause-split "$PAUSE_SPLIT_MS" \
+                --whisper-log "$WHISPER_LOG" > "$POSTPROCESS_LOG" 2>&1; then
                 
                 echo -e "${GREEN}✔${RESET}  (balanced & timed)"
                 mv "$PROCESSED_SRT_PATH" "$EXPECTED_SRT_PATH"
