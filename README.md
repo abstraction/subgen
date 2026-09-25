@@ -1,10 +1,7 @@
 <div align="center">
-<pre>
-    ▌       
-▛▘▌▌▛▌▛▌█▌▛▌
-▄▌▙▌▙▌▙▌▙▖▌▌
-      ▄▌    
-</pre>
+<p>
+  <img src="./logo.svg" alt="subgen" height="80">
+</p>
 
 A GPU-accelerated batch subtitle generator for Linux, macOS, and WSL. It transcribes media folders to .srt using FFmpeg and whisper.cpp
 </div>
