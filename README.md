@@ -21,7 +21,7 @@ subgen/
     └── models/
         ├── download-ggml-model.sh
         ├── download-vad-model.sh
-        ├── ggml-large-v3.bin           ← main transcription model
+        ├── ggml-large-v3-q5_0.bin      ← main transcription model
         └── ggml-silero-v6.2.0.bin      ← VAD model (optional but recommended)
 ```
 
@@ -118,19 +118,19 @@ sudo apt install ffmpeg
 
 ```bash
 cd whisper.cpp/models
-bash download-ggml-model.sh large-v3
+bash download-ggml-model.sh large-v3-q5_0
 cd ../..
 ```
 
-Downloads `ggml-large-v3.bin` into `whisper.cpp/models/`.
+Downloads `ggml-large-v3-q5_0.bin` into `whisper.cpp/models/`.
 
-> Whisper large-v3 is OpenAI's most accurate speech recognition model. It requires a moderate amount of VRAM (usually around 4-5 GB) during inference, fitting comfortably on 6 GB cards like the RTX 3050. For smaller GPUs, you can use quantized variants like `q5_0`.
+> Subgen defaults to `large-v3-q5_0` (~1.1 GB). Whisper decoding is memory-bandwidth bound. On consumer and laptop GPUs, 5-bit quantization cuts memory bus traffic by ~65% and avoids thermal throttling compared to full FP16, delivering faster transcription with negligible accuracy loss. You can still switch to full `large-v3` or `large-v3-turbo` by changing `WHISPER_MODEL_NAME` in `subgen.sh`.
 
 Verify the model and GPU are working with the bundled JFK sample:
 
 ```bash
 cd whisper.cpp
-./build/bin/whisper-cli -m models/ggml-large-v3.bin -l en -f samples/jfk.wav
+./build/bin/whisper-cli -m models/ggml-large-v3-q5_0.bin -l en -f samples/jfk.wav
 ```
 
 You should see a transcript. `ggml_cuda_init` in the output confirms the GPU was picked up.
@@ -284,7 +284,7 @@ Most options live at the top of `subgen.sh`, though language can be overridden a
 
 | Variable             | Default         | Description                                                  |
 | -------------------- | --------------- | ------------------------------------------------------------ |
-| `WHISPER_MODEL_NAME` | `large-v3`      | Whisper model variant to use                                 |
+| `WHISPER_MODEL_NAME` | `large-v3-q5_0` | Whisper model variant to use                                 |
 | `LANGUAGE`           | `en`            | Spoken language code                                         |
 | `TASK`               | `transcribe`    | `transcribe` or `translate` (to English)                     |
 | `USE_CUDA`           | `true`          | Enable NVIDIA GPU acceleration                               |
@@ -338,15 +338,15 @@ The real-world gap between Q8 and Q5 is small. Most files produce identical tran
 
 VRAM usage varies significantly depending on context size and runtime settings. The below are approximations.
 
-| Model             | VRAM Need | Quality       | Languages | Best for                            |
-| ----------------- | --------- | ------------- | --------- | ----------------------------------- |
-| `large-v3` (FP16) | Moderate  | Baseline      | 99        | **Default, best all-rounder**       |
-| `large-v3-q8_0`   | Moderate  | Near-lossless | 99        | Maximum quantized quality           |
-| `large-v3-q5_0`   | Low       | Excellent     | 99        | Good balance for smaller GPUs       |
-| `medium.en`       | Moderate  | Good          | English   | Unquantized medium baseline         |
-| `medium.en-q5_0`  | Low       | Good          | English   | Speed priority or low-VRAM fallback |
+| Model             | VRAM Need          | Quality       | Languages | Best for                                    |
+| ----------------- | ------------------ | ------------- | --------- | ------------------------------------------- |
+| `large-v3-q5_0`   | Low (~2.1 GB)      | Excellent     | 99        | **Default, best balance of speed and accuracy** |
+| `large-v3-q8_0`   | Moderate (~3.1 GB) | Near-lossless | 99        | Maximum quantized quality                   |
+| `large-v3` (FP16) | Moderate (~4.1 GB) | Baseline      | 99        | Full precision for high-memory desktop GPUs |
+| `medium.en`       | Moderate (~2.6 GB) | Good          | English   | Unquantized medium baseline                 |
+| `medium.en-q5_0`  | Low (~1.0 GB)      | Good          | English   | Speed priority or low-VRAM fallback         |
 
-> `large-v3` (FP16) fits comfortably on most 6 GB cards like the RTX 3050. If you are tight on VRAM, you can use a quantized model like `q5_0`.
+> Full FP16 `large-v3` fits within 6 GB of VRAM, but streaming its 3.1 GB weights on every token saturates narrow memory buses on laptop GPUs. This causes thermal throttling and slower transcription. `large-v3-q5_0` cuts weights to 1.1 GB, running faster and cooler while preserving transcription accuracy.
 
 ---
 
@@ -385,10 +385,10 @@ Then set `WHISPER_MODEL_NAME="large-v3-q8_0"` in `subgen.sh`.
 
 | Goal                              | Model to use                         |
 | --------------------------------- | ------------------------------------ |
-| Best overall (default)            | `large-v3` + `LANGUAGE=en`           |
+| Best overall (default)            | `large-v3-q5_0` + `LANGUAGE=en`      |
 | Maximum quantized quality         | `large-v3-q8_0`                      |
 | Speed over accuracy               | `medium.en-q5_0`                     |
-| Multilingual / language switching | `large-v3` (run with `--auto`)       |
+| Multilingual / language switching | `large-v3-q5_0` (run with `--auto`)  |
 
 [↑ Back to top](#subgen)
 
@@ -456,7 +456,7 @@ Detection is case-insensitive (`.MP4`, `.mp3`, etc. all work).
 | Symptom                                       | Fix                                                                                                                   |
 | --------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
 | `whisper-cli: not found`                      | Run the cmake build step inside `whisper.cpp/`.                                                                       |
-| Model not found                               | Run `bash whisper.cpp/models/download-ggml-model.sh large-v3`.                                                        |
+| Model not found                               | Run `bash whisper.cpp/models/download-ggml-model.sh large-v3-q5_0`.                                                   |
 | `VAD model not found`                         | Run `bash whisper.cpp/models/download-vad-model.sh silero-v6.2.0`, or set `USE_VAD=false` in `subgen.sh`.             |
 | CUDA silent failure (fell back to CPU)        | Not enough VRAM. Try `medium.en-q5_0` (~1.0 GB VRAM).                                                                 |
 | `failed to initialize CUDA`                   | Update NVIDIA drivers on the **Windows** host, then reboot.                                                           |

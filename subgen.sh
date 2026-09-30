@@ -26,7 +26,8 @@ WHISPER_EXECUTABLE="$WHISPER_SUBMODULE_DIR/build/bin/whisper-cli"
 # ---------------------------------------------------------------------------
 # MODEL, LANGUAGE, AND TASK CONFIGURATION
 # ---------------------------------------------------------------------------
-WHISPER_MODEL_NAME="large-v3"
+# WHISPER_MODEL_NAME="large-v3"
+WHISPER_MODEL_NAME="large-v3-q5_0"
 LANGUAGE="en"
 TASK="transcribe"
 WHISPER_MODEL="$WHISPER_SUBMODULE_DIR/models/ggml-$WHISPER_MODEL_NAME.bin"
@@ -131,6 +132,7 @@ FILES_SKIPPED=0
 # GPU verification: set after first file confirms CUDA is active
 GPU_VERIFIED=false
 VRAM_BASELINE_MB=0
+PEAK_VRAM_MB=0
 
 WHISPER_PID=""
 RETRY_PID=""
@@ -243,6 +245,9 @@ function show_progress_bar() {
             v=$(nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits --id=$NVIDIA_GPU_INDEX 2>/dev/null | xargs || true)
             if [[ -n "$v" ]]; then
                 vram_used="${v}"
+                if [ "$v" -gt "$PEAK_VRAM_MB" ]; then
+                    PEAK_VRAM_MB="$v"
+                fi
             fi
         fi
 
@@ -330,28 +335,42 @@ function gpu_diagnostics() {
         local ratio
         ratio=$(awk "BEGIN {printf \"%.1f\", $audio_seconds / ($total_ms / 1000)}")
         echo -e "   ${MAGENTA}│${RESET}  ${GREEN}✔${RESET} Speed ratio:   ${BOLD}${ratio}× real-time${RESET}  (${audio_seconds}s audio → ${total_sec}s wall)"
-        # Verdict
+        # Verdict: threshold adapts to model size and laptop hardware
+        local min_expected_ratio=5
+        if [[ "$WHISPER_MODEL_NAME" =~ "large" ]]; then
+            min_expected_ratio=2  # large-v3 has 1.55B params; >2x confirms GPU acceleration on laptop GPUs
+        elif [[ "$WHISPER_MODEL_NAME" =~ "medium" ]]; then
+            min_expected_ratio=3
+        fi
         local ratio_int
         ratio_int=$(awk "BEGIN {printf \"%d\", $audio_seconds / ($total_ms / 1000)}")
-        if [ "$ratio_int" -ge 5 ]; then
+        if [ "$ratio_int" -ge "$min_expected_ratio" ] && [[ -n "$backend" ]]; then
             echo -e "   ${MAGENTA}│${RESET}"
             echo -e "   ${MAGENTA}│${RESET}  ${GREEN}${BOLD}   ✓ VERDICT: GPU is confirmed active.${RESET}"
-            echo -e "   ${MAGENTA}│${RESET}  ${DIM}   (>5× real-time on ${WHISPER_MODEL_NAME} is highly unlikely on CPU)${RESET}"
+            echo -e "   ${MAGENTA}│${RESET}  ${DIM}   (Speed ratio ${ratio}× confirms GPU acceleration for ${WHISPER_MODEL_NAME})${RESET}"
+        elif [[ -n "$backend" ]]; then
+            echo -e "   ${MAGENTA}│${RESET}"
+            echo -e "   ${MAGENTA}│${RESET}  ${GREEN}${BOLD}   ✓ VERDICT: GPU backend confirmed (${backend}).${RESET}"
+            echo -e "   ${MAGENTA}│${RESET}  ${YELLOW}   Speed is ${ratio}× (lower than typical >${min_expected_ratio}×; check laptop thermals/power limit).${RESET}"
         else
             echo -e "   ${MAGENTA}│${RESET}"
-            echo -e "   ${MAGENTA}│${RESET}  ${YELLOW}${BOLD}   ⚠ VERDICT: Speed is suspiciously low.${RESET}"
-            echo -e "   ${MAGENTA}│${RESET}  ${YELLOW}   This may indicate GPU is NOT being used.${RESET}"
-            echo -e "   ${MAGENTA}│${RESET}  ${YELLOW}   Expected >5× for GPU; got ${ratio}×.${RESET}"
+            echo -e "   ${MAGENTA}│${RESET}  ${YELLOW}${BOLD}   ⚠ VERDICT: CUDA backend not confirmed in log.${RESET}"
+            echo -e "   ${MAGENTA}│${RESET}  ${YELLOW}   Whisper may have fallen back to CPU.${RESET}"
         fi
     fi
 
-    # 5. Live VRAM delta
-    if [ "$USE_GPU" = true ] && command -v nvidia-smi &>/dev/null; then
-        local current_vram
-        current_vram=$(nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits --id=$NVIDIA_GPU_INDEX 2>/dev/null | xargs || true)
-        if [[ -n "$current_vram" ]] && [ "$VRAM_BASELINE_MB" -gt 0 ]; then
-            local delta=$(( current_vram - VRAM_BASELINE_MB ))
-            echo -e "   ${MAGENTA}│${RESET}  ${GREEN}✔${RESET} VRAM delta:    ${BOLD}+${delta} MiB${RESET} above idle baseline (${VRAM_BASELINE_MB} → ${current_vram} MiB)"
+    # 5. VRAM delta (use peak VRAM recorded during transcription)
+    if [ "$USE_GPU" = true ]; then
+        if [ "$PEAK_VRAM_MB" -gt 0 ] && [ "$VRAM_BASELINE_MB" -ge 0 ]; then
+            local delta=$(( PEAK_VRAM_MB - VRAM_BASELINE_MB ))
+            echo -e "   ${MAGENTA}│${RESET}  ${GREEN}✔${RESET} VRAM delta:    ${BOLD}+${delta} MiB${RESET} peak above idle baseline (${VRAM_BASELINE_MB} → ${PEAK_VRAM_MB} MiB)"
+        elif command -v nvidia-smi &>/dev/null && [ "$VRAM_BASELINE_MB" -gt 0 ]; then
+            local current_vram
+            current_vram=$(nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits --id=$NVIDIA_GPU_INDEX 2>/dev/null | xargs || true)
+            if [[ -n "$current_vram" ]]; then
+                local delta=$(( current_vram - VRAM_BASELINE_MB ))
+                echo -e "   ${MAGENTA}│${RESET}  ${GREEN}✔${RESET} VRAM delta:    ${BOLD}+${delta} MiB${RESET} above idle baseline (${VRAM_BASELINE_MB} → ${current_vram} MiB)"
+            fi
         fi
     fi
 
